@@ -1,0 +1,50 @@
+name: ESP32 Firmware
+
+# Compiles the optional ESP32-WROOM-32 DevKit V1 companion firmware with
+# PlatformIO. The firmware is optional; this job only guarantees it builds.
+# A dummy secrets.h is generated so the credential-less source compiles in CI.
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+    branches: [master, main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware/esp32-wroom32-devkit-v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/esp32-wroom32-devkit-v1/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Generate placeholder secrets header
+        run: |
+          cp include/secrets.h.example include/secrets.h
+
+      - name: Build firmware (mock mode)
+        run: pio run -e esp32dev

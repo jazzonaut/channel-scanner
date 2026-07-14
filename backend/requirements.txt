@@ -1,0 +1,20 @@
+# Pinned runtime dependencies for rtl-sdr-channel-detector backend.
+# See CONTRACT.md. RECEIVE-ONLY passive spectrum monitor.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+numpy==2.2.1
+scipy==1.15.0
+aiosqlite==0.20.0
+python-multipart==0.0.20
+websockets==14.1
+structlog==24.4.0
+
+# Test-only (kept here for convenience; also in pyproject [project.optional-dependencies].dev)
+httpx==0.28.1
+pytest==8.3.4
+pytest-asyncio==0.25.0
+
+# Optional hardware backend (install via: pip install -e '.[rtlsdr]')
+# pyrtlsdr==0.3.0

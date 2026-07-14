@@ -1,0 +1,79 @@
+# docker-compose.yml — rtl-sdr-channel-detector
+#
+# RECEIVE-ONLY RTL-SDR spectrum monitoring app.
+#
+# Quickstart:
+#   cp .env.example .env
+#   docker compose up --build
+#   open http://localhost:8080
+#
+# By default this runs in SIMULATION_MODE=true (see .env.example), so it works
+# with NO dongle attached. To use a real RTL-SDR dongle, set SDR_BACKEND=rtlsdr
+# (or soapy / rtl_power) and SIMULATION_MODE=false in .env, and make sure USB
+# passthrough is configured (see docs/usb-passthrough.md).
+
+services:
+  app:
+    build:
+      # Build context is the repo root so the Dockerfile can COPY backend/ and
+      # frontend/ from their real locations.
+      context: .
+      dockerfile: docker/app.Dockerfile
+    image: rtl-sdr-channel-detector:latest
+    container_name: rtl-sdr-channel-detector
+    env_file:
+      - .env
+    ports:
+      # Host WEB_PORT (default 8080) -> container 8080.
+      - "${WEB_PORT:-8080}:8080"
+    volumes:
+      # Persist database, recordings and logs on the host.
+      - ./data:/data
+    restart: unless-stopped
+
+    # -----------------------------------------------------------------------
+    # USB passthrough (preferred, non-privileged).
+    #
+    # 1) Pass the whole USB bus into the container. RTL-SDR dongles enumerate as
+    #    /dev/bus/usb/<bus>/<dev>; passing the bus survives re-plugging.
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    # 2) Allow the container's cgroup to access USB character devices.
+    #    189 is the major number for the USB serial/bus character devices
+    #    (drivers/usb/core). "c 189:* rmw" = read/write/mknod on all such nodes.
+    device_cgroup_rules:
+      - "c 189:* rmw"
+    # Optional: join the host "plugdev" group by GID if your udev rules grant USB
+    # access to plugdev rather than world (MODE="0666"). Uncomment and set the
+    # GID to match your host: `getent group plugdev`.
+    # group_add:
+    #   - "46"   # example plugdev GID on Debian/Ubuntu — verify on YOUR host
+    # -----------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------
+    # Map a SPECIFIC device instead of the whole bus (optional, more locked-down).
+    # Find the bus/dev with `lsusb` on the host, then map that exact node. Note:
+    # the node changes if you re-plug the dongle, so /dev/bus/usb above is safer.
+    #
+    # devices:
+    #   - /dev/bus/usb/001/004:/dev/bus/usb/001/004
+    # -----------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------
+    # PRIVILEGED FALLBACK — EXPLICIT LAST RESORT, NOT RECOMMENDED.
+    # Only uncomment if /dev/bus/usb + device_cgroup_rules genuinely will not
+    # work on your host (some restrictive/rootless setups). This grants broad
+    # host device access and weakens isolation. Comment out the `devices:` and
+    # `device_cgroup_rules:` blocks above if you enable this.
+    #
+    # privileged: true
+    # -----------------------------------------------------------------------
+
+    # Container-level healthcheck. This mirrors the Dockerfile HEALTHCHECK; kept
+    # here so `docker compose ps` reports health even for pre-built images.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

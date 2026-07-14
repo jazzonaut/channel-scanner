@@ -1,0 +1,89 @@
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+develop-eggs/
+.installed.cfg
+*.egg
+.Python
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- Node / frontend --------------------------------------------------------
+node_modules/
+dist/
+.vite/
+frontend/dist/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# --- Environment / secrets --------------------------------------------------
+.env
+.env.*
+!.env.example
+firmware/**/secrets.h
+firmware/secrets.h
+
+# --- Data (keep dir + .gitkeep, ignore contents) ----------------------------
+data/*
+!data/.gitkeep
+!data/README.md
+# Belt-and-braces: ignore data artifacts anywhere
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+*.db
+*.db-wal
+*.db-shm
+# IQ recordings / captures
+*.iq
+*.cfile
+*.cf32
+*.cs8
+*.cu8
+*.wav
+*.sigmf-data
+*.sigmf-meta
+# Logs
+*.log
+logs/
+
+# --- PlatformIO / ESP32 firmware -------------------------------------------
+.pio/
+firmware/.pio/
+firmware/**/.pio/
+
+# --- Editors / IDE ----------------------------------------------------------
+# Track shared VS Code config, ignore local/user overrides.
+.vscode/*.local
+.vscode/settings.local.json
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS junk ----------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini

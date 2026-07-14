@@ -1,0 +1,11 @@
+# Standalone ruff config (mirrors [tool.ruff] in pyproject.toml).
+line-length = 100
+target-version = "py311"
+extend-exclude = ["static", ".venv"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "W"]
+ignore = ["B008", "SIM108"]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011"]

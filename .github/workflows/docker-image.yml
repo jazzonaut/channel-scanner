@@ -1,0 +1,104 @@
+name: Docker Image
+
+# Builds the production container image from docker/app.Dockerfile.
+# On pushes to master and version tags the image is also published to the
+# GitHub Container Registry (GHCR). Pull requests build only (no push) so the
+# Dockerfile is always validated without needing registry permissions.
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*.*.*"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Only log in when we intend to push (never on pull_request from forks).
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/app.Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Smoke-test the freshly built image in simulation mode (no SDR hardware).
+  smoke-test:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/app.Dockerfile
+          push: false
+          load: true
+          tags: rtl-sdr-channel-detector:ci
+          cache-from: type=gha
+
+      - name: Run container in simulation mode
+        run: |
+          docker run -d --name detector \
+            -e SIMULATION_MODE=true -e SDR_BACKEND=sim \
+            -p 8080:8080 rtl-sdr-channel-detector:ci
+          echo "Waiting for API to become healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/api/health; then
+              echo "healthy"; exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become healthy"; docker logs detector; exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs detector || true

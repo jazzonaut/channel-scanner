@@ -1,0 +1,41 @@
+{
+  "name": "rtl-sdr-channel-detector",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "moby": true
+    }
+  },
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": {
+      "label": "Web UI",
+      "onAutoForward": "notify"
+    }
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/data,target=${containerWorkspaceFolder}/data,type=bind,consistency=cached"
+  ],
+  "postCreateCommand": "bash scripts/bootstrap.sh || true",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker",
+        "platformio.platformio-ide",
+        "ms-vscode-remote.remote-containers"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "./backend/.venv/bin/python"
+      }
+    }
+  }
+}

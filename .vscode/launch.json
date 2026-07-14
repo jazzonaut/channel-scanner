@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: FastAPI (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--host", "0.0.0.0",
+        "--port", "8080",
+        "--reload"
+      ],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "SIMULATION_MODE": "true",
+        "SDR_BACKEND": "sim",
+        "DATABASE_PATH": "${workspaceFolder}/data/db/channel_detector.sqlite3",
+        "RECORDING_PATH": "${workspaceFolder}/data/recordings"
+      },
+      "jinja": false,
+      "justMyCode": false,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Frontend: Chrome (localhost:8080)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:8080",
+      "webRoot": "${workspaceFolder}/frontend/src"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full stack (backend + Chrome)",
+      "configurations": ["Backend: FastAPI (uvicorn)", "Frontend: Chrome (localhost:8080)"]
+    }
+  ]
+}
