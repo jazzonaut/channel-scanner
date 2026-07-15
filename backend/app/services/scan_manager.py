@@ -284,6 +284,7 @@ class ScanManager:
             "scan_start", f"session={self._session_id}", data={"session_id": self._session_id}
         )
         log.info("scan.start", session_id=self._session_id)
+        await self._broadcast_status()  # push new scanning state to all clients now
         return self._session_id
 
     async def stop_scan(self) -> None:
@@ -301,6 +302,7 @@ class ScanManager:
             await self._repos.sessions.stop(self._session_id, iso_now())
         await self._emit_event("scan_stop", f"session={self._session_id}")
         log.info("scan.stop", session_id=self._session_id)
+        await self._broadcast_status()  # push idle state to all clients now
 
     async def focus(self, center_hz: int, span_hz: int | None, channel_id: int | None) -> None:
         self._mode = "focus"
@@ -604,6 +606,12 @@ class ScanManager:
         span_total = max(1, self._config.end_hz - self._config.start_hz)
         pos = self._current_center() - self._config.start_hz
         self.metrics.scan_progress = round(min(1.0, max(0.0, pos / span_total)), 4)
+        # Keep the dashboard (device, live metrics, scanning state) fresh ~1/s.
+        await self._broadcast_status()
+
+    async def _broadcast_status(self) -> None:
+        """Broadcast device + live metrics + scanning state to all clients."""
+        self._ws.broadcast_status(self.device_info(), await self.metrics_dict(), self._scanning)
 
     # ------------------------------------------------------------ sweep math
     def _current_center(self) -> int:

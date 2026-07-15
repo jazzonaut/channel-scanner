@@ -27,8 +27,13 @@ export function Dashboard(): JSX.Element {
     setBusy(true);
     setError(null);
     try {
-      if (scanning) await api.stopScan();
-      else await api.startScan();
+      if (scanning) {
+        await api.stopScan();
+        useStore.getState().setScanning(false); // optimistic; WS status confirms
+      } else {
+        await api.startScan();
+        useStore.getState().setScanning(true);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {

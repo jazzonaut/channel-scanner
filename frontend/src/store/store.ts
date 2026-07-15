@@ -42,6 +42,7 @@ export interface AppState {
   setStatus: (device: DeviceInfo, metrics: Metrics, scanning: boolean) => void;
   setMetrics: (metrics: Metrics) => void;
   setDevice: (device: DeviceInfo) => void;
+  setScanning: (scanning: boolean) => void;
 
   // channels (keyed by id)
   channels: Map<number, CandidateChannel>;
@@ -91,6 +92,7 @@ export const useStore = create<AppState>((set, get) => ({
   metrics: null,
   scanning: false,
   setStatus: (device, metrics, scanning) => set({ device, metrics, scanning }),
+  setScanning: (scanning) => set({ scanning }),
   setMetrics: (metrics) => set({ metrics }),
   setDevice: (device) => set({ device }),
 

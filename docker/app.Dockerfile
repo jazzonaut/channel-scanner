@@ -86,7 +86,9 @@ RUN pip install --no-cache-dir --upgrade pip \
     # It is an optional extra in pyproject, but this image ships USB passthrough
     # support, so we install it here so SDR_BACKEND=rtlsdr works out of the box.
     # (Without it the app logs "No module named 'rtlsdr'" and falls back to sim.)
-    && pip install --no-cache-dir "pyrtlsdr==0.3.0"
+    # setuptools provides pkg_resources, which pyrtlsdr 0.3.0 imports at import
+    # time; python:3.12-slim does not ship it, so install it explicitly.
+    && pip install --no-cache-dir "setuptools>=70" "pyrtlsdr==0.3.0"
 
 # ---- Application code ------------------------------------------------------
 COPY backend/ /app/
