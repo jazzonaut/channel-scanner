@@ -324,6 +324,30 @@ th.sortable {
 th.sortable:hover {
   color: var(--text);
 }
+/* Avg-power heat bar: fill width tracks the 0..1 normalized value so a block of
+   similar channels reads as similar-length bars. */
+.heatcell {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 96px;
+  padding: 0 4px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.heatcell-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.12), rgba(56, 189, 248, 0.4));
+  border-right: 1px solid rgba(56, 189, 248, 0.55);
+}
+.heatcell-val {
+  position: relative;
+  white-space: nowrap;
+}
 tbody tr:hover {
   background: rgba(56, 189, 248, 0.06);
 }
@@ -586,8 +610,8 @@ th.num {
 }
 .scope-hover {
   position: absolute;
-  top: 4px;
-  transform: translateX(-50%);
+  right: 6px;
+  transform: translateY(-50%);
   pointer-events: none;
   display: flex;
   flex-direction: column;
@@ -600,15 +624,32 @@ th.num {
   border-radius: 4px;
   white-space: nowrap;
 }
-.scope-axis {
+/* Scope layout: vertical frequency axis on the left, spectrogram fills the rest,
+   time runs left -> right. */
+.scope-view {
   display: flex;
+  gap: 8px;
+}
+.scope-yaxis {
+  display: flex;
+  flex-direction: column;
   justify-content: space-between;
+  align-items: flex-end;
+  flex: 0 0 auto;
+  width: 62px;
+  padding: 2px 4px 2px 0;
   font-size: 0.72rem;
   color: var(--text-faint);
-  padding: 4px 2px 0;
 }
-.scope-axis span {
+.scope-canvas-col {
   flex: 1 1 0;
+  min-width: 0;
+}
+.scope-time-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: 70px;
+  padding: 4px 2px 0;
 }
 .amplitude-strip {
   border: 1px solid var(--border);

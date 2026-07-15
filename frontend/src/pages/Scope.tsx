@@ -177,24 +177,30 @@ export function Scope(): JSX.Element {
 
         {inFocus ? (
           <>
-            <ScopeSpectrogram key={windowKey ?? 'pending'} height={360} rows={512} spanDb={60} />
+            <div className="scope-view" style={{ height: 360 }}>
+              {axis && (
+                <div className="scope-yaxis mono">
+                  {[...axis.ticks].reverse().map((hz, i) => (
+                    <span key={i}>{hzToMHz(hz).toFixed(3)}</span>
+                  ))}
+                </div>
+              )}
+              <div className="scope-canvas-col">
+                <ScopeSpectrogram key={windowKey ?? 'pending'} height={360} rows={512} spanDb={60} />
+              </div>
+            </div>
             {axis ? (
-              <div className="scope-axis mono">
-                {axis.ticks.map((hz, i) => (
-                  <span
-                    key={i}
-                    style={{ textAlign: i === 0 ? 'left' : i === 4 ? 'right' : 'center' }}
-                  >
-                    {hzToMHz(hz).toFixed(3)}
-                  </span>
-                ))}
+              <div className="scope-time-axis small faint mono">
+                <span>← older</span>
+                <span>time</span>
+                <span>newest →</span>
               </div>
             ) : (
               <div className="hint">Waiting for the first scope frame…</div>
             )}
             <div className="hint">
-              Frequency across the parked window (MHz) on X; newest time at the top scrolling down.
-              Hover for a frequency and level readout.
+              Time flows left → right (newest on the right); frequency (MHz) is on the vertical axis,
+              high at the top. Hover for a frequency and level readout.
             </div>
           </>
         ) : (

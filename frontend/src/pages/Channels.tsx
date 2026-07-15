@@ -59,6 +59,24 @@ export function Channels(): JSX.Element {
     return arr;
   }, [channelMap, sortKey, asc]);
 
+  // Normalize avg power to 0..1 across the current channels so similar values
+  // read as similar-length bars — a block of similar channels stands out,
+  // especially when the table is sorted by Avg.
+  const avgRange = useMemo(() => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const c of channels) {
+      if (c.avg_power_db < min) min = c.avg_power_db;
+      if (c.avg_power_db > max) max = c.avg_power_db;
+    }
+    return { min, max, span: max - min };
+  }, [channels]);
+
+  function avgNorm(db: number): number {
+    if (!Number.isFinite(avgRange.span) || avgRange.span <= 0) return 0.5;
+    return Math.min(1, Math.max(0, (db - avgRange.min) / avgRange.span));
+  }
+
   function toggleSort(key: SortKey): void {
     if (key === sortKey) setAsc((v) => !v);
     else {
@@ -157,7 +175,21 @@ export function Channels(): JSX.Element {
                   <td className="num">{hzSpanToHuman(ch.bandwidth_hz)}</td>
                   <td className="num">{formatDb(ch.current_power_db)}</td>
                   <td className="num">{formatDb(ch.peak_power_db)}</td>
-                  <td className="num">{formatDb(ch.avg_power_db)}</td>
+                  <td className="num">
+                    <div
+                      className="heatcell"
+                      title={`Normalized avg power: ${avgNorm(ch.avg_power_db).toFixed(2)} (0 = lowest, 1 = highest of listed channels)`}
+                    >
+                      <div
+                        className="heatcell-bar"
+                        style={{ width: `${(avgNorm(ch.avg_power_db) * 100).toFixed(0)}%` }}
+                      />
+                      <span className="heatcell-val">
+                        {formatDb(ch.avg_power_db)}{' '}
+                        <span className="faint">{avgNorm(ch.avg_power_db).toFixed(2)}</span>
+                      </span>
+                    </div>
+                  </td>
                   <td className="num">{formatSnr(ch.snr_db)}</td>
                   <td className="num">{ch.observation_count}</td>
                   <td title={formatIso(ch.first_seen)}>{formatRelative(ch.first_seen)}</td>
