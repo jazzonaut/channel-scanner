@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../lib/api';
 import { InfoTip } from '../components/InfoTip';
 import { turboColor } from '../lib/colormap';
@@ -35,32 +35,52 @@ export function Occupancy(): JSX.Element {
   const [freqBins, setFreqBins] = useState<number>(DEFAULT_FREQ_BINS);
   const [bucketSeconds, setBucketSeconds] = useState<number>(DEFAULT_BUCKET_SECONDS);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const [data, setData] = useState<OccupancyResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
+  const mounted = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    const load = async (): Promise<void> => {
-      setLoading(true);
-      setError(null);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // `silent` reloads keep the current heatmap on screen (no loading flicker) so
+  // the live poll updates in place.
+  const load = useCallback(
+    async (silent: boolean): Promise<void> => {
+      if (!silent) setLoading(true);
       try {
         const res = await api.getOccupancy(freqBins, minutes, bucketSeconds);
-        if (!cancelled) setData(res);
+        if (mounted.current) {
+          setData(res);
+          setError(null);
+        }
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : String(err));
+        if (mounted.current) setError(err instanceof ApiError ? err.message : String(err));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (mounted.current && !silent) setLoading(false);
       }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [minutes, freqBins, bucketSeconds, refreshKey]);
+    },
+    [freqBins, minutes, bucketSeconds],
+  );
+
+  // Full (non-silent) load on mount, control change, or manual refresh.
+  useEffect(() => {
+    void load(false);
+  }, [load, refreshKey]);
+
+  // Live auto-refresh: silently re-poll every 10 s while enabled.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => void load(true), 10_000);
+    return () => clearInterval(id);
+  }, [autoRefresh, load]);
 
   const maxCount = useMemo(() => {
     if (!data) return 0;
@@ -170,6 +190,18 @@ export function Occupancy(): JSX.Element {
                 </option>
               ))}
             </select>
+          </label>
+          <label
+            className="small faint"
+            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            title="Automatically re-poll every 10 seconds"
+          >
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Live
           </label>
           <button onClick={() => setRefreshKey((k) => k + 1)} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}

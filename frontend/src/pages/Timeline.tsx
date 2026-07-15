@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '../store/store';
 import { api } from '../lib/api';
 import type { CandidateChannel, Detection } from '../lib/types';
@@ -26,6 +26,7 @@ export function Timeline(): JSX.Element {
   const [burstsByChannel, setBurstsByChannel] = useState<Map<number, Burst[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const now = Date.now();
   const windowStart = now - windowMs;
@@ -34,44 +35,55 @@ export function Timeline(): JSX.Element {
   // on every live channel update. Subscribing to the per-second channel stream
   // here caused a reload + full re-render each second, which reset the page
   // scroll and hammered the API. A 5 s poll keeps the view fresh without churn.
+  const mounted = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    const load = async (): Promise<void> => {
-      const chs = Array.from(useStore.getState().channels.values())
-        .sort((a, b) => b.last_seen.localeCompare(a.last_seen))
-        .slice(0, MAX_CHANNELS);
-      const start = Date.now() - windowMs;
-      const map = new Map<number, Burst[]>();
-      await Promise.all(
-        chs.map(async (ch) => {
-          try {
-            const res = await api.getChannelObservations(ch.id, 300);
-            const bursts: Burst[] = [];
-            for (const d of res.observations) {
-              const t = new Date(d.timestamp).getTime();
-              if (Number.isNaN(t) || t < start) continue;
-              bursts.push({ detection: d, startMs: t, durationMs: d.duration_ms ?? 50 });
-            }
-            map.set(ch.id, bursts);
-          } catch {
-            map.set(ch.id, []);
-          }
-        }),
-      );
-      if (!cancelled) {
-        setChannels(chs);
-        setBurstsByChannel(map);
-        setLoading(false);
-      }
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
     };
+  }, []);
+
+  const load = useCallback(async (): Promise<void> => {
+    const chs = Array.from(useStore.getState().channels.values())
+      .sort((a, b) => b.last_seen.localeCompare(a.last_seen))
+      .slice(0, MAX_CHANNELS);
+    const start = Date.now() - windowMs;
+    const map = new Map<number, Burst[]>();
+    await Promise.all(
+      chs.map(async (ch) => {
+        try {
+          const res = await api.getChannelObservations(ch.id, 300);
+          const bursts: Burst[] = [];
+          for (const d of res.observations) {
+            const t = new Date(d.timestamp).getTime();
+            if (Number.isNaN(t) || t < start) continue;
+            bursts.push({ detection: d, startMs: t, durationMs: d.duration_ms ?? 50 });
+          }
+          map.set(ch.id, bursts);
+        } catch {
+          map.set(ch.id, []);
+        }
+      }),
+    );
+    if (mounted.current) {
+      setChannels(chs);
+      setBurstsByChannel(map);
+      setLoading(false);
+    }
+  }, [windowMs]);
+
+  // Full load on mount / window change / manual refresh.
+  useEffect(() => {
     setLoading(true);
     void load();
-    const timer = setInterval(() => void load(), 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [windowMs, refreshKey]);
+  }, [load, refreshKey]);
+
+  // Live auto-refresh: re-poll every 5 s while enabled.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = setInterval(() => void load(), 5000);
+    return () => clearInterval(id);
+  }, [autoRefresh, load]);
 
   return (
     <div>
@@ -89,6 +101,18 @@ export function Timeline(): JSX.Element {
               </option>
             ))}
           </select>
+          <label
+            className="small faint"
+            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            title="Automatically re-poll every 5 seconds"
+          >
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Live
+          </label>
           <button onClick={() => setRefreshKey((k) => k + 1)} disabled={loading}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
