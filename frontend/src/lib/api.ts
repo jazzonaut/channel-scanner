@@ -91,6 +91,9 @@ export const api = {
 
   // --- config ---
   getConfig: (): Promise<ScanConfigVersioned> => request('/api/config'),
+  // `update` is a Partial<ScanConfig> built by validateSettings, so every editable
+  // field (receiver, band/sweep, detection, display, recording/retention) is spread
+  // through here — new fields are sent as soon as validateSettings emits them.
   updateConfig: (
     update: ScanConfigUpdate,
     version: number,

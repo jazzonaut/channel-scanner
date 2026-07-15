@@ -56,6 +56,12 @@ async def client(app) -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
+async def ctx(app, client):  # noqa: ANN001, ANN201 - test fixture
+    """The live AppContext (DB, scan manager, recorder, retention) during lifespan."""
+    return app.state.ctx
+
+
+@pytest_asyncio.fixture
 async def db(tmp_path: Path) -> AsyncIterator[Database]:
     database = Database(str(tmp_path / "unit.sqlite3"))
     await database.connect()

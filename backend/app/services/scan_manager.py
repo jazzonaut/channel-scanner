@@ -37,6 +37,8 @@ from ..storage.repositories import Repositories
 from ..utils import iso_now, utcnow
 from ..websocket.manager import ConnectionManager
 from .control_lease import ControlLease
+from .recorder import Recorder
+from .retention import RetentionService
 
 log = structlog.get_logger(__name__)
 
@@ -76,6 +78,11 @@ class ScanManager:
         self._backend: SdrBackend | None = None
         self._config = self._initial_config(settings)
         self._version = 1
+
+        # Set post-construction via attach_services() to avoid ctor ordering
+        # coupling; update_config() propagates runtime settings to them.
+        self._recorder: Recorder | None = None
+        self._retention: RetentionService | None = None
 
         self._scanning = False
         self._task: asyncio.Task | None = None
@@ -128,7 +135,63 @@ class ScanManager:
             fft_size=s.fft_size,
             backend=s.sdr_backend,
             simulation=s.effective_simulation(),
+            device_index=s.sdr_device_index,
+            spectrum_fps=s.spectrum_fps,
+            spectrum_bins=s.spectrum_bins,
+            enable_iq_recording=s.enable_iq_recording,
+            max_iq_storage_gb=s.max_iq_storage_gb,
+            retention_days=s.retention_days,
         )
+
+    def attach_services(self, recorder: Recorder, retention: RetentionService) -> None:
+        """Wire in services that receive runtime config updates."""
+        self._recorder = recorder
+        self._retention = retention
+
+    async def _reconfigure_backend(self) -> None:
+        """Re-open the SDR backend after a receiver/device/sim change.
+
+        Restarts an active scan around the swap. On failure the factory falls
+        back to the simulator; the actual backend/simulation are reconciled back
+        into the live config so the UI reflects reality.
+        """
+        was_scanning = self._scanning
+        if was_scanning:
+            await self.stop_scan()
+        if self._backend is not None:
+            try:
+                self._backend.close()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("scan.backend_close_error", error=str(exc))
+            self._backend = None
+
+        eff = self._settings.model_copy(
+            update={
+                "sdr_backend": self._config.backend,
+                "sdr_device_index": self._config.device_index,
+                "simulation_mode": self._config.simulation,
+                "sdr_sample_rate": self._config.sample_rate,
+                "sdr_gain": self._config.gain,
+                "sdr_ppm": self._config.ppm,
+                "scan_start_hz": self._config.start_hz,
+                "scan_end_hz": self._config.end_hz,
+            }
+        )
+        self._backend = create_backend(eff)
+        self._backend.open()
+        info = self._backend.get_info()
+        # Reconcile with the backend actually opened (factory may have fallen back).
+        self._config = self._config.model_copy(
+            update={"backend": info.backend, "simulation": info.simulation}
+        )
+        await self._emit_event(
+            "backend_reconfigured",
+            f"backend={info.backend} simulation={info.simulation}",
+            data={"backend": info.backend, "simulation": info.simulation},
+        )
+        log.info("scan.backend_reconfigured", backend=info.backend, simulation=info.simulation)
+        if was_scanning:
+            await self.start_scan()
 
     def _proximity_hz(self) -> int:
         widths = self._config.known_channel_widths_hz
@@ -260,6 +323,7 @@ class ScanManager:
         self, update: schemas.ScanConfigUpdate, *, client_id: str
     ) -> schemas.ScanConfig:
         """Apply a validated partial config update, bump version, persist, notify."""
+        prev = self._config
         merged = self._config.model_dump()
         for key, value in update.model_dump(exclude_unset=True).items():
             merged[key] = value
@@ -272,12 +336,28 @@ class ScanManager:
         self._compute_sweep_plan()  # band/step/sample-rate may have changed
         self._reset_band_buffer()
 
-        if self._backend is not None:
+        # Switching receiver, device or sim/real requires re-opening the SDR
+        # (the device is bound when opened). This restarts an active scan.
+        if (
+            new_config.backend != prev.backend
+            or new_config.device_index != prev.device_index
+            or new_config.simulation != prev.simulation
+        ):
+            await self._reconfigure_backend()
+        elif self._backend is not None:
             self._backend.set_sample_rate(new_config.sample_rate)
             self._backend.set_gain("auto" if new_config.gain == "auto" else float(new_config.gain))
             self._backend.set_ppm(new_config.ppm)
 
-        config_json = new_config.model_dump_json()
+        # Propagate recording + retention governance to their services.
+        if self._recorder is not None:
+            self._recorder.apply_config(
+                new_config.enable_iq_recording, new_config.max_iq_storage_gb
+            )
+        if self._retention is not None:
+            self._retention.apply_config(new_config.retention_days)
+
+        config_json = self._config.model_dump_json()
         await self._repos.config_changes.record(
             timestamp=iso_now(),
             version=self._version,
@@ -486,7 +566,7 @@ class ScanManager:
 
     def _maybe_emit_spectrum(self, center: int, span: int) -> None:
         now = time.monotonic()
-        min_interval = 1.0 / max(1, self._settings.spectrum_fps)
+        min_interval = 1.0 / max(1, self._config.spectrum_fps)
         if now - self._last_spectrum_emit < min_interval:
             return
         self._last_spectrum_emit = now
@@ -579,7 +659,7 @@ class ScanManager:
 
     def _reset_band_buffer(self) -> None:
         """(Re)allocate the stitched full-band spectrum buffer."""
-        n = max(16, int(self._settings.spectrum_bins))
+        n = max(16, int(self._config.spectrum_bins))
         self._band_freqs = np.linspace(float(self._config.start_hz), float(self._config.end_hz), n)
         # Start each band bin at a low sentinel; segments fill in as scanned.
         self._band_power = np.full(n, -140.0, dtype=np.float64)

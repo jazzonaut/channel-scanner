@@ -23,6 +23,12 @@ const BASE_CONFIG: ScanConfig = {
   fft_size: 2048,
   backend: 'sim',
   simulation: true,
+  device_index: 0,
+  spectrum_fps: 30,
+  spectrum_bins: 1024,
+  enable_iq_recording: false,
+  max_iq_storage_gb: 5,
+  retention_days: 30,
 };
 
 function validForm(): SettingsFormValues {
@@ -83,6 +89,67 @@ describe('validateSettings', () => {
     f.sampleRate = '1000';
     const { errors } = validateSettings(f);
     expect(errors.sampleRate).toBeDefined();
+  });
+
+  it('accepts the new runtime fields and produces typed values', () => {
+    const { update, errors } = validateSettings(validForm());
+    expect(errors).toEqual({});
+    expect(update.backend).toBe('sim');
+    expect(update.simulation).toBe(true);
+    expect(update.device_index).toBe(0);
+    expect(update.spectrum_fps).toBe(30);
+    expect(update.spectrum_bins).toBe(1024);
+    expect(update.enable_iq_recording).toBe(false);
+    expect(update.max_iq_storage_gb).toBe(5);
+    expect(update.retention_days).toBe(30);
+  });
+
+  it('rejects an unknown backend', () => {
+    const f = validForm();
+    f.backend = 'hackrf';
+    const { errors } = validateSettings(f);
+    expect(errors.backend).toBeDefined();
+  });
+
+  it('rejects a negative device index', () => {
+    const f = validForm();
+    f.deviceIndex = '-1';
+    const { errors } = validateSettings(f);
+    expect(errors.deviceIndex).toBeDefined();
+  });
+
+  it('rejects an out-of-range spectrum FPS', () => {
+    const f = validForm();
+    f.spectrumFps = '90';
+    const { errors } = validateSettings(f);
+    expect(errors.spectrumFps).toBeDefined();
+
+    f.spectrumFps = '0';
+    expect(validateSettings(f).errors.spectrumFps).toBeDefined();
+  });
+
+  it('rejects out-of-range spectrum bins', () => {
+    const f = validForm();
+    f.spectrumBins = '8';
+    expect(validateSettings(f).errors.spectrumBins).toBeDefined();
+    f.spectrumBins = '9000';
+    expect(validateSettings(f).errors.spectrumBins).toBeDefined();
+  });
+
+  it('rejects negative retention days and non-integer values', () => {
+    const f = validForm();
+    f.retentionDays = '-3';
+    expect(validateSettings(f).errors.retentionDays).toBeDefined();
+    f.retentionDays = '0';
+    expect(validateSettings(f).errors.retentionDays).toBeDefined();
+    f.retentionDays = '1.5';
+    expect(validateSettings(f).errors.retentionDays).toBeDefined();
+  });
+
+  it('rejects negative max IQ storage', () => {
+    const f = validForm();
+    f.maxIqStorageGb = '-1';
+    expect(validateSettings(f).errors.maxIqStorageGb).toBeDefined();
   });
 });
 

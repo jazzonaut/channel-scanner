@@ -40,6 +40,15 @@ class ScanConfig(BaseModel):
     fft_size: int
     backend: str
     simulation: bool
+    # Receiver selection (affects scanning -> user-configurable).
+    device_index: int = 0
+    # Display of the live scan.
+    spectrum_fps: int = 10
+    spectrum_bins: int = 1024
+    # Recording + retention governance for scan data.
+    enable_iq_recording: bool = False
+    max_iq_storage_gb: float = 2.0
+    retention_days: int = 30
 
     @model_validator(mode="after")
     def _check_ranges(self) -> ScanConfig:
@@ -54,6 +63,18 @@ class ScanConfig(BaseModel):
         for lo, hi in self.exclusions:
             if lo >= hi:
                 raise ValueError("each exclusion must have low_hz < high_hz")
+        if self.device_index < 0:
+            raise ValueError("device_index must be >= 0")
+        if not 1 <= self.spectrum_fps <= 60:
+            raise ValueError("spectrum_fps must be in [1, 60]")
+        if not 16 <= self.spectrum_bins <= 8192:
+            raise ValueError("spectrum_bins must be in [16, 8192]")
+        if self.max_iq_storage_gb < 0:
+            raise ValueError("max_iq_storage_gb must be >= 0")
+        if self.retention_days < 1:
+            raise ValueError("retention_days must be >= 1")
+        if self.backend not in {"sim", "rtlsdr", "rtl_power", "soapy"}:
+            raise ValueError("backend must be one of: sim, rtlsdr, rtl_power, soapy")
         return self
 
     @field_validator("gain")
@@ -96,6 +117,12 @@ class ScanConfigUpdate(BaseModel):
     fft_size: int | None = None
     backend: str | None = None
     simulation: bool | None = None
+    device_index: int | None = None
+    spectrum_fps: int | None = None
+    spectrum_bins: int | None = None
+    enable_iq_recording: bool | None = None
+    max_iq_storage_gb: float | None = None
+    retention_days: int | None = None
 
     @field_validator("gain")
     @classmethod

@@ -51,6 +51,11 @@ class Recorder:
         self._max_bytes = int(settings.max_iq_storage_gb * (1024**3))
         self._enabled = settings.enable_iq_recording
 
+    def apply_config(self, enabled: bool, max_storage_gb: float) -> None:
+        """Update recording governance at runtime (from a config change)."""
+        self._enabled = bool(enabled)
+        self._max_bytes = int(max(0.0, max_storage_gb) * (1024**3))
+
     @property
     def enabled(self) -> bool:
         return self._enabled

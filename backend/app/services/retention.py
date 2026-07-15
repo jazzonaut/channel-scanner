@@ -34,13 +34,18 @@ class RetentionService:
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        self._retention_days = int(settings.retention_days)
+
+    def apply_config(self, retention_days: int) -> None:
+        """Update the retention window at runtime (from a config change)."""
+        self._retention_days = max(1, int(retention_days))
 
     async def start(self) -> None:
         if self._task is not None:
             return
         self._stop.clear()
         self._task = asyncio.create_task(self._loop(), name="retention")
-        log.info("retention.started", interval_s=self._interval, days=self._settings.retention_days)
+        log.info("retention.started", interval_s=self._interval, days=self._retention_days)
 
     async def stop(self) -> None:
         self._stop.set()
@@ -62,7 +67,7 @@ class RetentionService:
 
     async def run_once(self) -> dict[str, int]:
         """Delete rows older than the cutoff. Returns deletion counts."""
-        cutoff = iso(utcnow() - timedelta(days=self._settings.retention_days))
+        cutoff = iso(utcnow() - timedelta(days=self._retention_days))
         conn = self._repos.db.connection
         deleted: dict[str, int] = {}
         async with self._repos.db.write_lock:

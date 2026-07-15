@@ -1,6 +1,11 @@
-import type { ScanConfig } from './types';
+import { SCAN_BACKENDS, type ScanBackend, type ScanConfig } from './types';
 
 export interface SettingsFormValues {
+  // Receiver
+  backend: string; // one of SCAN_BACKENDS
+  simulation: boolean;
+  deviceIndex: string; // integer >= 0
+  // Band & sweep
   startMhz: string;
   endMhz: string;
   stepHz: string; // 0 = auto
@@ -13,9 +18,32 @@ export interface SettingsFormValues {
   exclusions: string; // "lowMHz-highMHz, ..." per line/comma
   knownWidthsHz: string; // comma separated Hz
   fftSize: string;
+  // Display
+  spectrumFps: string; // integer 1..60
+  spectrumBins: string; // integer 16..8192
+  // Recording & retention
+  enableIqRecording: boolean;
+  maxIqStorageGb: string; // float >= 0
+  retentionDays: string; // integer >= 1
 }
 
+/** Keys of the form that hold string values (text/number/select inputs). */
+export type StringFieldKey = {
+  [K in keyof SettingsFormValues]: SettingsFormValues[K] extends string ? K : never;
+}[keyof SettingsFormValues];
+
+/** Keys of the form that hold boolean values (checkbox toggles). */
+export type BoolFieldKey = {
+  [K in keyof SettingsFormValues]: SettingsFormValues[K] extends boolean ? K : never;
+}[keyof SettingsFormValues];
+
 export type FieldErrors = Partial<Record<keyof SettingsFormValues, string>>;
+
+const BACKEND_SET = new Set<string>(SCAN_BACKENDS);
+
+function isBackend(v: string): v is ScanBackend {
+  return BACKEND_SET.has(v);
+}
 
 export interface ParsedSettings {
   update: Partial<ScanConfig>;
@@ -80,6 +108,16 @@ export function validateSettings(v: SettingsFormValues): ParsedSettings {
   const errors: FieldErrors = {};
   const update: Partial<ScanConfig> = {};
 
+  const backend = v.backend.trim();
+  if (!isBackend(backend)) errors.backend = `Must be one of: ${SCAN_BACKENDS.join(', ')}`;
+  else update.backend = backend;
+
+  update.simulation = v.simulation;
+
+  const deviceIndex = num(v.deviceIndex);
+  if (!isInt(deviceIndex) || deviceIndex < 0) errors.deviceIndex = 'Integer ≥ 0';
+  else update.device_index = deviceIndex;
+
   const startMhz = num(v.startMhz);
   const endMhz = num(v.endMhz);
   if (!Number.isFinite(startMhz)) errors.startMhz = 'Required, in MHz';
@@ -140,6 +178,27 @@ export function validateSettings(v: SettingsFormValues): ParsedSettings {
   if (widths.error) errors.knownWidthsHz = widths.error;
   else update.known_channel_widths_hz = widths.value;
 
+  const spectrumFps = num(v.spectrumFps);
+  if (!isInt(spectrumFps) || spectrumFps < 1 || spectrumFps > 60) {
+    errors.spectrumFps = 'Integer 1–60 fps';
+  } else update.spectrum_fps = spectrumFps;
+
+  const spectrumBins = num(v.spectrumBins);
+  if (!isInt(spectrumBins) || spectrumBins < 16 || spectrumBins > 8192) {
+    errors.spectrumBins = 'Integer 16–8192';
+  } else update.spectrum_bins = spectrumBins;
+
+  update.enable_iq_recording = v.enableIqRecording;
+
+  const maxIqStorageGb = num(v.maxIqStorageGb);
+  if (!Number.isFinite(maxIqStorageGb) || maxIqStorageGb < 0) {
+    errors.maxIqStorageGb = 'Number ≥ 0 (GB)';
+  } else update.max_iq_storage_gb = maxIqStorageGb;
+
+  const retentionDays = num(v.retentionDays);
+  if (!isInt(retentionDays) || retentionDays < 1) errors.retentionDays = 'Integer ≥ 1 day';
+  else update.retention_days = retentionDays;
+
   return { update, errors };
 }
 
@@ -192,6 +251,9 @@ export function computeWarnings(v: SettingsFormValues): SettingsWarning[] {
 /** Build initial form values from a live ScanConfig. */
 export function configToForm(c: ScanConfig): SettingsFormValues {
   return {
+    backend: c.backend,
+    simulation: c.simulation,
+    deviceIndex: c.device_index.toString(),
     startMhz: (c.start_hz / 1e6).toString(),
     endMhz: (c.end_hz / 1e6).toString(),
     stepHz: c.step_hz.toString(),
@@ -204,6 +266,11 @@ export function configToForm(c: ScanConfig): SettingsFormValues {
     exclusions: c.exclusions.map(([lo, hi]) => `${lo / 1e6}-${hi / 1e6}`).join(', '),
     knownWidthsHz: c.known_channel_widths_hz.join(', '),
     fftSize: c.fft_size.toString(),
+    spectrumFps: c.spectrum_fps.toString(),
+    spectrumBins: c.spectrum_bins.toString(),
+    enableIqRecording: c.enable_iq_recording,
+    maxIqStorageGb: c.max_iq_storage_gb.toString(),
+    retentionDays: c.retention_days.toString(),
   };
 }
 

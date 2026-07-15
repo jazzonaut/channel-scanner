@@ -24,7 +24,17 @@ export interface ScanConfig {
   fft_size: number;
   backend: string;
   simulation: boolean;
+  device_index: number;
+  spectrum_fps: number;
+  spectrum_bins: number;
+  enable_iq_recording: boolean;
+  max_iq_storage_gb: number;
+  retention_days: number;
 }
+
+/** Allowed receiver backends (mirrors the backend enum). */
+export const SCAN_BACKENDS = ['sim', 'rtlsdr', 'rtl_power', 'soapy'] as const;
+export type ScanBackend = (typeof SCAN_BACKENDS)[number];
 
 /** All fields optional; only changed fields are sent. */
 export type ScanConfigUpdate = Partial<ScanConfig>;

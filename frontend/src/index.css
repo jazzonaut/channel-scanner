@@ -376,6 +376,46 @@ th.num {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 4px 16px;
 }
+
+/* ---------- settings sections ---------- */
+.settings-section {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  margin-bottom: 16px;
+}
+.settings-section > .section-head {
+  margin: 0 0 2px;
+  font-size: 1rem;
+}
+.settings-section > .section-note {
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  margin: 0 0 12px;
+}
+.settings-section .inline-warn {
+  margin: 0 0 12px;
+}
+.field.checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.field.checkbox input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.field.checkbox label {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.85rem;
+}
 .notice {
   border-radius: var(--radius);
   padding: 8px 12px;

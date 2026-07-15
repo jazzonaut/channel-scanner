@@ -7,10 +7,20 @@ import {
   configToForm,
   PRESETS,
   validateSettings,
+  type BoolFieldKey,
   type FieldErrors,
   type SettingsFormValues,
+  type StringFieldKey,
 } from '../lib/settingsValidation';
+import { SCAN_BACKENDS } from '../lib/types';
 import { formatIso } from '../lib/format';
+
+const BACKEND_LABELS: Record<(typeof SCAN_BACKENDS)[number], string> = {
+  sim: 'Simulator (sim)',
+  rtlsdr: 'RTL-SDR (rtlsdr)',
+  rtl_power: 'rtl_power',
+  soapy: 'SoapySDR (soapy)',
+};
 
 export function Settings(): JSX.Element {
   const config = useStore((s) => s.config);
@@ -51,7 +61,11 @@ export function Settings(): JSX.Element {
     );
   }
 
-  function set<K extends keyof SettingsFormValues>(key: K, value: string): void {
+  function set<K extends StringFieldKey>(key: K, value: string): void {
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+  }
+
+  function setBool<K extends BoolFieldKey>(key: K, value: boolean): void {
     setForm((f) => (f ? { ...f, [key]: value } : f));
   }
 
@@ -107,6 +121,11 @@ export function Settings(): JSX.Element {
 
   const disabled = !isOperator || saving;
 
+  const receiverChanged =
+    form.backend !== config.backend ||
+    form.simulation !== config.simulation ||
+    form.deviceIndex !== String(config.device_index);
+
   return (
     <div>
       <div className="page-header">
@@ -158,16 +177,36 @@ export function Settings(): JSX.Element {
         </p>
       </div>
 
-      <div className="card">
+      <section className="settings-section">
+        <h2 className="section-head">Receiver</h2>
+        <p className="section-note">
+          Source device and tuner front-end. Simulation generates synthetic spectra without
+          hardware.
+        </p>
+        {receiverChanged && (
+          <div className="notice warn inline-warn">
+            Changing the receiver, device or simulation mode re-opens the SDR and restarts an active
+            scan.
+          </div>
+        )}
         <div className="form-grid">
-          <Field label="Start (MHz)" error={errors.startMhz}>
-            <input value={form.startMhz} onChange={(e) => set('startMhz', e.target.value)} disabled={disabled} inputMode="decimal" />
+          <Field label="Backend" error={errors.backend}>
+            <select value={form.backend} onChange={(e) => set('backend', e.target.value)} disabled={disabled}>
+              {SCAN_BACKENDS.map((b) => (
+                <option key={b} value={b}>
+                  {BACKEND_LABELS[b]}
+                </option>
+              ))}
+            </select>
           </Field>
-          <Field label="End (MHz)" error={errors.endMhz}>
-            <input value={form.endMhz} onChange={(e) => set('endMhz', e.target.value)} disabled={disabled} inputMode="decimal" />
-          </Field>
-          <Field label="Step (Hz, 0 = auto)" error={errors.stepHz}>
-            <input value={form.stepHz} onChange={(e) => set('stepHz', e.target.value)} disabled={disabled} inputMode="numeric" />
+          <Checkbox
+            label="Simulation mode"
+            checked={form.simulation}
+            onChange={(v) => setBool('simulation', v)}
+            disabled={disabled}
+          />
+          <Field label="Device index" error={errors.deviceIndex}>
+            <input value={form.deviceIndex} onChange={(e) => set('deviceIndex', e.target.value)} disabled={disabled} inputMode="numeric" />
           </Field>
           <Field label="Sample rate (Hz)" error={errors.sampleRate}>
             <input value={form.sampleRate} onChange={(e) => set('sampleRate', e.target.value)} disabled={disabled} inputMode="numeric" />
@@ -178,14 +217,26 @@ export function Settings(): JSX.Element {
           <Field label="Frequency correction (ppm)" error={errors.ppm}>
             <input value={form.ppm} onChange={(e) => set('ppm', e.target.value)} disabled={disabled} inputMode="numeric" />
           </Field>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h2 className="section-head">Band &amp; sweep</h2>
+        <p className="section-note">
+          Frequency range and per-hop dwell. Frequencies are entered in MHz and stored as exact Hz.
+        </p>
+        <div className="form-grid">
+          <Field label="Start (MHz)" error={errors.startMhz}>
+            <input value={form.startMhz} onChange={(e) => set('startMhz', e.target.value)} disabled={disabled} inputMode="decimal" />
+          </Field>
+          <Field label="End (MHz)" error={errors.endMhz}>
+            <input value={form.endMhz} onChange={(e) => set('endMhz', e.target.value)} disabled={disabled} inputMode="decimal" />
+          </Field>
+          <Field label="Step (Hz, 0 = auto)" error={errors.stepHz}>
+            <input value={form.stepHz} onChange={(e) => set('stepHz', e.target.value)} disabled={disabled} inputMode="numeric" />
+          </Field>
           <Field label="Dwell (ms)" error={errors.dwellMs}>
             <input value={form.dwellMs} onChange={(e) => set('dwellMs', e.target.value)} disabled={disabled} inputMode="numeric" />
-          </Field>
-          <Field label="Detection threshold (dB above noise)" error={errors.thresholdDb}>
-            <input value={form.thresholdDb} onChange={(e) => set('thresholdDb', e.target.value)} disabled={disabled} inputMode="decimal" />
-          </Field>
-          <Field label="Noise floor EMA alpha (0–1)" error={errors.noiseFloorAlpha}>
-            <input value={form.noiseFloorAlpha} onChange={(e) => set('noiseFloorAlpha', e.target.value)} disabled={disabled} inputMode="decimal" />
           </Field>
           <Field label="FFT size" error={errors.fftSize}>
             <select value={form.fftSize} onChange={(e) => set('fftSize', e.target.value)} disabled={disabled}>
@@ -196,6 +247,21 @@ export function Settings(): JSX.Element {
               ))}
             </select>
           </Field>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h2 className="section-head">Detection</h2>
+        <p className="section-note">
+          Thresholding, noise-floor tracking and the bands to ignore.
+        </p>
+        <div className="form-grid">
+          <Field label="Detection threshold (dB above noise)" error={errors.thresholdDb}>
+            <input value={form.thresholdDb} onChange={(e) => set('thresholdDb', e.target.value)} disabled={disabled} inputMode="decimal" />
+          </Field>
+          <Field label="Noise floor EMA alpha (0–1)" error={errors.noiseFloorAlpha}>
+            <input value={form.noiseFloorAlpha} onChange={(e) => set('noiseFloorAlpha', e.target.value)} disabled={disabled} inputMode="decimal" />
+          </Field>
           <Field label="Exclusions (MHz ranges, e.g. 868.2-868.4)" error={errors.exclusions}>
             <input value={form.exclusions} onChange={(e) => set('exclusions', e.target.value)} disabled={disabled} placeholder="low-high, low-high" />
           </Field>
@@ -203,8 +269,48 @@ export function Settings(): JSX.Element {
             <input value={form.knownWidthsHz} onChange={(e) => set('knownWidthsHz', e.target.value)} disabled={disabled} placeholder="12500, 25000" />
           </Field>
         </div>
+      </section>
 
-        <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+      <section className="settings-section">
+        <h2 className="section-head">Display</h2>
+        <p className="section-note">
+          These control the live spectrum refresh rate and resolution shown in the UI; they do not
+          affect detection.
+        </p>
+        <div className="form-grid">
+          <Field label="Spectrum FPS (1–60)" error={errors.spectrumFps}>
+            <input value={form.spectrumFps} onChange={(e) => set('spectrumFps', e.target.value)} disabled={disabled} inputMode="numeric" />
+          </Field>
+          <Field label="Spectrum bins (16–8192)" error={errors.spectrumBins}>
+            <input value={form.spectrumBins} onChange={(e) => set('spectrumBins', e.target.value)} disabled={disabled} inputMode="numeric" />
+          </Field>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h2 className="section-head">Recording &amp; retention</h2>
+        <p className="section-note">
+          IQ recording is off by default. When enabled, older recordings are pruned once storage or
+          retention limits are hit.
+        </p>
+        <div className="form-grid">
+          <Checkbox
+            label="Enable IQ recording"
+            checked={form.enableIqRecording}
+            onChange={(v) => setBool('enableIqRecording', v)}
+            disabled={disabled}
+          />
+          <Field label="Max IQ storage (GB)" error={errors.maxIqStorageGb}>
+            <input value={form.maxIqStorageGb} onChange={(e) => set('maxIqStorageGb', e.target.value)} disabled={disabled} inputMode="decimal" />
+          </Field>
+          <Field label="Retention (days)" error={errors.retentionDays}>
+            <input value={form.retentionDays} onChange={(e) => set('retentionDays', e.target.value)} disabled={disabled} inputMode="numeric" />
+          </Field>
+        </div>
+      </section>
+
+      <div className="card">
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button onClick={reset} disabled={saving}>
             Reset
           </button>
@@ -257,6 +363,30 @@ function Field({
       <label>{label}</label>
       {children}
       {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+function Checkbox({
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  disabled: boolean;
+}): JSX.Element {
+  return (
+    <div className="field checkbox">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+      />
+      <label>{label}</label>
     </div>
   );
 }
