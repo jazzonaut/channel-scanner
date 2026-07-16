@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from app.signal_processing.wavenis import (
     WAVENIS_CENTER_HZ,
     WAVENIS_CHANNELS_HZ,
+    WIDEBAND_MIN_HZ,
     WavenisWidebandAnalyzer,
 )
 
@@ -100,13 +101,41 @@ def test_wideband_burst_is_flagged_and_persisted_in_snapshot() -> None:
     assert len(snap["recent_candidates"]) >= 1
 
 
-def test_fhss_hop_across_channels_is_flagged() -> None:
-    analyzer = WavenisWidebandAnalyzer(threshold_db=10.0)
-    events = []
-    for block in np.array_split(_capture_with_hops(), 5):
-        events.extend(analyzer.process(block, center_hz=WAVENIS_CENTER_HZ, sample_rate=2_400_000))
-    # The third distinct channel touched within the window trips the FHSS tell.
-    assert any(e.is_candidate and "fhss_hop" in e.candidate_reasons for e in events)
+def test_busy_band_with_concurrent_neighbours_is_not_flagged() -> None:
+    # Regression: several independent narrowband neighbours active on different
+    # channels at the same time must NOT be mistaken for one FHSS emitter. A
+    # naive "distinct channels active" hop test flooded the log with these.
+    sample_rate = 2_400_000
+    count = int(sample_rate * 0.2)
+    rng = np.random.default_rng(9)
+    iq = (rng.normal(0, 0.01, count) + 1j * rng.normal(0, 0.01, count)).astype(np.complex64)
+    t = np.arange(count, dtype=np.float64) / sample_rate
+    mask = (t >= 0.02) & (t < 0.18)
+    for freq in (867_890_000, 868_085_000, 868_650_000):  # 3 channels, concurrent
+        off = freq - WAVENIS_CENTER_HZ
+        iq[mask] += (0.15 * np.exp(2j * np.pi * off * t[mask])).astype(np.complex64)
+    analyzer = WavenisWidebandAnalyzer()
+    events = analyzer.process(iq, center_hz=WAVENIS_CENTER_HZ, sample_rate=sample_rate)
+    assert not [e for e in events if e.is_candidate]
+
+
+def test_strong_narrowband_tone_bandwidth_is_not_leakage_inflated() -> None:
+    # A strong (~40 dB) narrow tone must report a narrow bandwidth despite
+    # spectral leakage, so it is not misread as wideband.
+    sample_rate = 2_400_000
+    count = int(sample_rate * 0.15)
+    rng = np.random.default_rng(13)
+    iq = (rng.normal(0, 0.01, count) + 1j * rng.normal(0, 0.01, count)).astype(np.complex64)
+    t = np.arange(count, dtype=np.float64) / sample_rate
+    mask = (t >= 0.05) & (t < 0.1)
+    off = 868_650_000 - WAVENIS_CENTER_HZ
+    iq[mask] += (0.5 * np.exp(2j * np.pi * off * t[mask])).astype(np.complex64)
+    analyzer = WavenisWidebandAnalyzer()
+    events = analyzer.process(iq, center_hz=WAVENIS_CENTER_HZ, sample_rate=sample_rate)
+    hits = [e for e in events if e.qualified and abs(e.freq_hz - 868_650_000) < 5_000]
+    assert hits
+    assert all(e.bandwidth_hz < WIDEBAND_MIN_HZ for e in hits)
+    assert not [e for e in hits if e.is_candidate]
 
 
 def test_single_narrowband_neighbour_is_not_flagged() -> None:

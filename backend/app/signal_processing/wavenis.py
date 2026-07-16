@@ -34,15 +34,21 @@ _GRID_SPACING_HZ = 100_000
 # --- Wavenis candidate fingerprint (see wavenis_868_technical_reference.md) ---
 # A burst is auto-flagged as a likely-meter candidate when it looks unlike the
 # steady narrowband ISM neighbours and like the Wavenis signature: a ~1.1 s long
-# wake-up, a ~50 ms short wake-up, a wide (~50 kHz GFSK) occupied bandwidth, or a
-# fast hop across several grid channels (FHSS). Thresholds are deliberately
-# conservative so an unattended multi-hour run does not fill up with neighbours.
+# wake-up (§10.1) or a wide (~50 kHz GFSK, §40) occupied bandwidth. These two
+# tells are robust in a busy band: duration is immune to spectral leakage and to
+# concurrent neighbours, and the bandwidth is measured at a fixed level below the
+# peak so a strong *narrowband* tone does not read as wide.
+#
+# NOTE: a naive "fast hop across channels" (FHSS) tell was removed -- in a real
+# busy 868 band it fired on concurrent independent neighbours (each parked on its
+# own channel) rather than one emitter actually hopping, flooding the log. Real
+# FHSS detection needs single-emitter tracking (a signal leaving A as it appears
+# on B) and is deferred until we have a cleaner capture to model it on.
 LONG_WAKEUP_MS = (900.0, 1400.0)  # §10.1 default long wake-up ~1100 ms
 SHORT_WAKEUP_MS = (35.0, 70.0)  # §10.2 fixed short wake-up 50 ms
-WIDEBAND_MIN_HZ = 20_000  # neighbours seen at <3 kHz; Wavenis ~50 kHz (§40)
-HOP_WINDOW_S = 2.0  # window in which to count distinct hop channels
-HOP_MAX_BURST_MS = 200.0  # only short bursts count toward a hop set
-HOP_MIN_CHANNELS = 3  # distinct grid channels touched -> FHSS-like
+WIDEBAND_MIN_HZ = 30_000  # neighbours read <10 kHz at -10 dB; Wavenis ~50 kHz
+WIDEBAND_MIN_DURATION_MS = 20.0  # ignore width on very short bursts (edge splatter)
+OCCUPIED_BW_DB = 10.0  # bandwidth measured this far below a region's peak
 CANDIDATE_MIN_SCORE = 2.0  # total weighted score to flag a candidate
 
 
@@ -92,10 +98,10 @@ class _Track:
     center_hz: float
     peak_db: float
     peak_snr_db: float
-    peak_width_hz: float = 0.0
     above_frames: int = 0
     below_frames: int = 0
     centroids: list[float] = field(default_factory=list)
+    widths: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -279,7 +285,13 @@ class WavenisWidebandAnalyzer:
             peak_local = int(np.argmax(seg_db))
             peak_db = float(seg_db[peak_local])
             peak_snr = peak_db - float(self._bin_noise_db[lo + peak_local])
-            width_hz = float(hi - lo) * self._bin_step
+            # Occupied bandwidth = span of bins within OCCUPIED_BW_DB of the
+            # peak, NOT every bin above the detection threshold. A strong
+            # narrowband tone leaks across many above-threshold bins but its
+            # -10 dB skirt is still only a bin or two, so this stays narrow for
+            # tones and only reads wide for genuinely wideband (GFSK) energy.
+            near_peak = int(np.count_nonzero(seg_db >= peak_db - OCCUPIED_BW_DB))
+            width_hz = float(max(1, near_peak)) * self._bin_step
             regions.append(
                 _Region(
                     center_hz=centroid,
@@ -309,9 +321,9 @@ class WavenisWidebandAnalyzer:
                         center_hz=region.center_hz,
                         peak_db=region.peak_db,
                         peak_snr_db=region.peak_snr_db,
-                        peak_width_hz=region.width_hz,
                         above_frames=1,
                         centroids=[region.center_hz],
+                        widths=[region.width_hz],
                     )
                 )
                 matched.add(len(self._tracks) - 1)
@@ -322,8 +334,8 @@ class WavenisWidebandAnalyzer:
             track.above_frames += 1
             track.peak_db = max(track.peak_db, region.peak_db)
             track.peak_snr_db = max(track.peak_snr_db, region.peak_snr_db)
-            track.peak_width_hz = max(track.peak_width_hz, region.width_hz)
             track.centroids.append(region.center_hz)
+            track.widths.append(region.width_hz)
             track.center_hz = float(np.median(track.centroids))
             matched.add(track_idx)
 
@@ -362,18 +374,12 @@ class WavenisWidebandAnalyzer:
         offset = measured_hz - float(_GRID_HZ[channel_index])
         qualified = track.above_frames >= self.min_qualified_frames
         noise_db = float(self._bin_noise_at(measured_hz))
-        bandwidth_hz = int(round(track.peak_width_hz))
+        # Median (steady-state) width, not max: a short burst's on/off edge
+        # frames splatter broadband and would otherwise inflate the bandwidth.
+        bandwidth_hz = int(round(float(np.median(track.widths)))) if track.widths else 0
         start_s = track.start_sample / sample_rate
 
-        # Classify against the Wavenis fingerprint. Hop detection reads the
-        # prior-burst history in self._recent, so classify BEFORE appending.
-        reasons, score = self._classify(
-            duration_ms=duration_ms,
-            bandwidth_hz=bandwidth_hz,
-            channel_index=channel_index,
-            start_s=start_s,
-            qualified=qualified,
-        )
+        reasons, score = self._classify(duration_ms=duration_ms, bandwidth_hz=bandwidth_hz)
         is_candidate = qualified and score >= CANDIDATE_MIN_SCORE
 
         burst = WavenisBurst(
@@ -404,15 +410,7 @@ class WavenisWidebandAnalyzer:
             self._candidates.append(burst.to_dict())
         return burst
 
-    def _classify(
-        self,
-        *,
-        duration_ms: float,
-        bandwidth_hz: int,
-        channel_index: int,
-        start_s: float,
-        qualified: bool,
-    ) -> tuple[list[str], float]:
+    def _classify(self, *, duration_ms: float, bandwidth_hz: int) -> tuple[list[str], float]:
         """Score a burst against the Wavenis fingerprint; return (reasons, score)."""
         reasons: list[str] = []
         score = 0.0
@@ -422,32 +420,10 @@ class WavenisWidebandAnalyzer:
         if SHORT_WAKEUP_MS[0] <= duration_ms <= SHORT_WAKEUP_MS[1]:
             reasons.append("short_wakeup")
             score += 1.0
-        if bandwidth_hz >= WIDEBAND_MIN_HZ:
+        if duration_ms >= WIDEBAND_MIN_DURATION_MS and bandwidth_hz >= WIDEBAND_MIN_HZ:
             reasons.append("wideband")
             score += 2.0
-        if qualified and self._hop_detected(channel_index, start_s, duration_ms):
-            reasons.append("fhss_hop")
-            score += 3.0
         return reasons, score
-
-    def _hop_detected(self, channel_index: int, start_s: float, duration_ms: float) -> bool:
-        """True when several distinct grid channels see short bursts in a window.
-
-        This is the FHSS tell. It requires HOP_MIN_CHANNELS distinct channels
-        touched by *short* bursts inside HOP_WINDOW_S, which the static
-        narrowband neighbours (each parked on one channel) never produce.
-        """
-        if duration_ms > HOP_MAX_BURST_MS:
-            return False
-        window_start = start_s - HOP_WINDOW_S
-        channels = {channel_index}
-        for prior in self._recent:
-            if not prior.qualified or prior.duration_ms > HOP_MAX_BURST_MS:
-                continue
-            if prior.start_s < window_start or prior.start_s > start_s:
-                continue
-            channels.add(prior.channel_index)
-        return len(channels) >= HOP_MIN_CHANNELS
 
     def _bin_noise_at(self, freq_hz: float) -> float:
         if self._bin_freqs is None or self._bin_noise_db is None or self._bin_freqs.size == 0:
