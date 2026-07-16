@@ -304,6 +304,18 @@ export function Investigate(): JSX.Element {
                     <span className="mono">{candidates.path}</span>. Correlate the timestamp with
                     water use to confirm.
                   </p>
+                  {(wavenis.suppressed_recurring ?? 0) > 0 && (
+                    <p className="small faint" style={{ margin: '0 0 8px' }}>
+                      Novelty filter: <strong>{wavenis.suppressed_recurring}</strong> repeat bursts
+                      from persistent emitters suppressed
+                      {wavenis.recurring_emitters_hz && wavenis.recurring_emitters_hz.length > 0
+                        ? ` (${wavenis.recurring_emitters_hz
+                            .map((hz) => `${(hz / 1e6).toFixed(2)} MHz`)
+                            .join(', ')})`
+                        : ''}
+                      . A real meter is rare, so these fixtures are filtered out.
+                    </p>
+                  )}
                   <div className="table-wrap">
                     <table>
                       <thead>

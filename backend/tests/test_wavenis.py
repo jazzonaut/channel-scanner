@@ -101,6 +101,31 @@ def test_wideband_burst_is_flagged_and_persisted_in_snapshot() -> None:
     assert len(snap["recent_candidates"]) >= 1
 
 
+def test_persistent_emitter_is_flagged_a_few_times_then_suppressed() -> None:
+    # A wideband fixture that keeps re-transmitting (like the 868.1 neighbour)
+    # must not flood the log: flag CANDIDATE_PERSISTENT_AFTER times, then
+    # suppress-and-count so a persistent emitter is bounded over a long run.
+    from app.signal_processing.wavenis import CANDIDATE_PERSISTENT_AFTER
+
+    analyzer = WavenisWidebandAnalyzer()
+    eligible = 0
+    flagged = 0
+    for _ in range(6):  # six separate wideband bursts at the same frequency
+        events = analyzer.process(
+            _capture_wideband(), center_hz=WAVENIS_CENTER_HZ, sample_rate=2_400_000
+        )
+        for e in events:
+            if e.qualified and e.candidate_score >= 2.0:
+                eligible += 1
+            if e.is_candidate:
+                flagged += 1
+    assert eligible >= 3
+    assert flagged == CANDIDATE_PERSISTENT_AFTER
+    snap = analyzer.snapshot()
+    assert snap["suppressed_recurring"] == eligible - CANDIDATE_PERSISTENT_AFTER
+    assert len(snap["recurring_emitters_hz"]) == 1
+
+
 def test_busy_band_with_concurrent_neighbours_is_not_flagged() -> None:
     # Regression: several independent narrowband neighbours active on different
     # channels at the same time must NOT be mistaken for one FHSS emitter. A

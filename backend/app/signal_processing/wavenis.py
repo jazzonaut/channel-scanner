@@ -51,6 +51,13 @@ WIDEBAND_MIN_DURATION_MS = 20.0  # ignore width on very short bursts (edge splat
 OCCUPIED_BW_DB = 10.0  # bandwidth measured this far below a region's peak
 CANDIDATE_MIN_SCORE = 2.0  # total weighted score to flag a candidate
 
+# Novelty filter: the meter is RARE, so a frequency that re-flags again and
+# again is a fixed installation (like the dual-tone 868.1 neighbour), not a
+# meter. Flag each frequency bucket only a few times, then suppress-and-count
+# it so a persistent emitter cannot flood the durable log over a long run.
+CANDIDATE_BUCKET_HZ = 50_000  # frequency bucket width for the novelty filter
+CANDIDATE_PERSISTENT_AFTER = 2  # flag a bucket this many times, then suppress
+
 
 def _nearest_grid_index(freq_hz: float) -> int:
     """Nearest nominal grid channel to a measured frequency (label only)."""
@@ -150,6 +157,8 @@ class WavenisWidebandAnalyzer:
         self._recent: deque[WavenisBurst] = deque(maxlen=recent_limit)
         self._candidates: deque[dict] = deque(maxlen=recent_limit)
         self._candidate_count = 0
+        self._bucket_flag_count: dict[int, int] = {}
+        self._suppressed_recurring = 0
         self._pending = np.empty(0, dtype=np.complex64)
         self._sample_cursor = 0
         self._sequence = 0
@@ -178,6 +187,8 @@ class WavenisWidebandAnalyzer:
         # lives on disk (see CandidateLog), so zeroing these here is safe.
         self._candidates = deque(maxlen=recent_limit)
         self._candidate_count = 0
+        self._bucket_flag_count = {}
+        self._suppressed_recurring = 0
         self._pending = np.empty(0, dtype=np.complex64)
         self._sample_cursor = 0
         self._sequence = 0
@@ -380,7 +391,17 @@ class WavenisWidebandAnalyzer:
         start_s = track.start_sample / sample_rate
 
         reasons, score = self._classify(duration_ms=duration_ms, bandwidth_hz=bandwidth_hz)
-        is_candidate = qualified and score >= CANDIDATE_MIN_SCORE
+        is_candidate = False
+        if qualified and score >= CANDIDATE_MIN_SCORE:
+            # Novelty filter: flag a frequency bucket only a few times, then
+            # treat it as a persistent fixture and suppress (but count) repeats.
+            bucket = int(round(measured_hz / CANDIDATE_BUCKET_HZ))
+            seen = self._bucket_flag_count.get(bucket, 0)
+            if seen < CANDIDATE_PERSISTENT_AFTER:
+                self._bucket_flag_count[bucket] = seen + 1
+                is_candidate = True
+            else:
+                self._suppressed_recurring += 1
 
         burst = WavenisBurst(
             sequence=self._sequence,
@@ -461,4 +482,10 @@ class WavenisWidebandAnalyzer:
             "recent_bursts": [burst.to_dict() for burst in self._recent],
             "candidates_flagged": self._candidate_count,
             "recent_candidates": list(self._candidates),
+            "suppressed_recurring": self._suppressed_recurring,
+            "recurring_emitters_hz": sorted(
+                bucket * CANDIDATE_BUCKET_HZ
+                for bucket, count in self._bucket_flag_count.items()
+                if count >= CANDIDATE_PERSISTENT_AFTER
+            ),
         }

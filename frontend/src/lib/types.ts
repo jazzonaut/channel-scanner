@@ -328,6 +328,8 @@ export interface WavenisStatus {
   recent_candidates: WavenisBurstEvidence[];
   candidates_flagged: number;
   candidates_persisted?: number;
+  suppressed_recurring?: number;
+  recurring_emitters_hz?: number[];
   acquisition?: WavenisAcquisitionStatus;
   capture?: WavenisCaptureStatus;
 }
