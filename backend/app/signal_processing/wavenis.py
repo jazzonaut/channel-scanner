@@ -99,6 +99,16 @@ class WavenisWidebandAnalyzer:
         self._center_hz = 0
         self._frames_processed = 0
 
+    def discontinuity(self, missing_samples: int = 0) -> None:
+        """End partial bursts when acquisition reports a sample-sequence gap."""
+        self._pending = np.empty(0, dtype=np.complex64)
+        self._sample_cursor += max(0, int(missing_samples))
+        for state in self._states:
+            state.active = False
+            state.below_frames = 0
+            state.above_frames = 0
+            state.centroid_offsets = []
+
     def process(self, iq: np.ndarray, *, center_hz: int, sample_rate: int) -> list[WavenisBurst]:
         if not self.can_observe(center_hz, sample_rate):
             return []

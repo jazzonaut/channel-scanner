@@ -119,13 +119,43 @@ class Recorder:
         n_samples = int(sr * duration_ms / 1000.0)
         n_samples = max(1, n_samples)
 
-        bytes_per_sample = 2 if fmt == "cu8" else 8  # cu8: I+Q uint8; cf32: 2x float32
-        self._enforce_storage_cap(n_samples * bytes_per_sample)
-
-        self._dir.mkdir(parents=True, exist_ok=True)
         backend.set_center_freq(center_hz)
         backend.set_sample_rate(sr)
         iq = backend.read_iq(n_samples).astype(np.complex64)
+
+        return self.capture_iq(
+            iq,
+            center_hz=center_hz,
+            sample_rate=sr,
+            gain=gain,
+            reason=reason,
+            fmt=fmt,
+        )
+
+    def capture_iq(
+        self,
+        iq: np.ndarray,
+        *,
+        center_hz: int,
+        sample_rate: int,
+        gain: str = "auto",
+        reason: str = "triggered",
+        fmt: str = "cu8",
+        annotations: list[dict] | None = None,
+    ) -> RecordingResult:
+        """Persist IQ that has already passed through the single-owner reader."""
+        if not self._enabled:
+            raise RuntimeError("IQ recording is disabled. Set ENABLE_IQ_RECORDING=true to enable.")
+        fmt = (fmt or "cu8").lower()
+        if fmt not in ("cf32", "cu8"):
+            raise ValueError("format must be 'cf32' or 'cu8'")
+        samples = np.asarray(iq, dtype=np.complex64)
+        sr = int(sample_rate)
+        max_samples = max(1, int(sr * _MAX_CAPTURE_MS / 1000.0))
+        samples = samples[:max_samples]
+        bytes_per_sample = 2 if fmt == "cu8" else 8
+        self._enforce_storage_cap(int(samples.size) * bytes_per_sample)
+        self._dir.mkdir(parents=True, exist_ok=True)
 
         ts = iso_now()
         stem = f"iq_{center_hz}_{ts.replace(':', '').replace('.', '')}"
@@ -134,15 +164,19 @@ class Recorder:
 
         if fmt == "cu8":
             datatype = "cu8"
-            inter_u8 = np.empty(iq.size * 2, dtype=np.uint8)
-            inter_u8[0::2] = np.clip(np.round(iq.real * 127.5 + 127.5), 0, 255).astype(np.uint8)
-            inter_u8[1::2] = np.clip(np.round(iq.imag * 127.5 + 127.5), 0, 255).astype(np.uint8)
+            inter_u8 = np.empty(samples.size * 2, dtype=np.uint8)
+            inter_u8[0::2] = np.clip(np.round(samples.real * 127.5 + 127.5), 0, 255).astype(
+                np.uint8
+            )
+            inter_u8[1::2] = np.clip(np.round(samples.imag * 127.5 + 127.5), 0, 255).astype(
+                np.uint8
+            )
             inter_u8.tofile(str(data_path))
         else:
             datatype = _SIGMF_DATATYPE
-            interleaved = np.empty(iq.size * 2, dtype=np.float32)
-            interleaved[0::2] = iq.real
-            interleaved[1::2] = iq.imag
+            interleaved = np.empty(samples.size * 2, dtype=np.float32)
+            interleaved[0::2] = samples.real
+            interleaved[1::2] = samples.imag
             interleaved.tofile(str(data_path))
         nbytes = data_path.stat().st_size
 
@@ -162,7 +196,7 @@ class Recorder:
                     "channel_detector:gain": gain,
                 }
             ],
-            "annotations": [],
+            "annotations": annotations or [],
         }
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -171,7 +205,7 @@ class Recorder:
             path=str(data_path),
             center_hz=center_hz,
             sample_rate=sr,
-            duration_ms=duration_ms,
+            duration_ms=round(samples.size / sr * 1000.0),
             bytes=nbytes,
             reason=reason,
         )
@@ -180,7 +214,7 @@ class Recorder:
             center_hz=center_hz,
             sample_rate=sr,
             gain=str(gain),
-            duration_ms=duration_ms,
+            duration_ms=round(samples.size / sr * 1000.0),
             format=datatype,
             bytes=nbytes,
             timestamp=ts,

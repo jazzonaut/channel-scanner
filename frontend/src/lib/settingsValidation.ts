@@ -288,6 +288,8 @@ export const PRESETS: Record<string, Partial<SettingsFormValues>> = {
     fftSize: '4096',
     spectrumFps: '10',
     spectrumBins: '2048',
+    enableIqRecording: true,
+    maxIqStorageGb: '2',
   },
   'near-device': {
     stepHz: '0',

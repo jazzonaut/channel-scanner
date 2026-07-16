@@ -268,6 +268,34 @@ export interface WavenisBurstEvidence {
   freq_offset_hz: number;
 }
 
+export interface WavenisAcquisitionStatus {
+  mode: 'native_continuous' | 'bounded_reads';
+  blocks_acquired: number;
+  samples_acquired: number;
+  sample_cursor: number;
+  queue_depth: number;
+  queue_capacity: number;
+  dropped_blocks: number;
+  dropped_samples: number;
+  timing_gaps: number;
+  estimated_gap_samples: number;
+  retunes?: number;
+  error: string | null;
+}
+
+export interface WavenisCaptureStatus {
+  enabled: boolean;
+  format: 'cu8';
+  buffered_seconds: number;
+  pre_trigger_seconds: number;
+  post_trigger_seconds: number;
+  max_capture_seconds: number;
+  capture_pending: boolean;
+  pending_triggers: number;
+  captures_completed: number;
+  captures_aborted_discontinuity: number;
+}
+
 export interface WavenisStatus {
   configured: boolean;
   active: boolean;
@@ -281,6 +309,8 @@ export interface WavenisStatus {
   frames_processed: number;
   channels: WavenisChannelEvidence[];
   recent_bursts: WavenisBurstEvidence[];
+  acquisition?: WavenisAcquisitionStatus;
+  capture?: WavenisCaptureStatus;
 }
 
 // ---------------------------------------------------------------------------

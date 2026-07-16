@@ -181,6 +181,17 @@ status is shown on **Investigate my meter** and returned by `GET /api/wavenis`.
 The initial 12 dB threshold is conservative; per-channel floors adapt without
 letting impulsive signals quickly redefine themselves as noise.
 
+On a real RTL-SDR, the parked profile uses librtlsdr's continuous callback
+stream. Acquired blocks carry monotonic sample positions; queue loss and timing
+gaps are reported in the UI/API and partial burst state is discarded across a
+gap. The tuner is not redundantly reprogrammed for every block.
+
+Applying the Wavenis preset also enables the existing 2 GB capped IQ retention.
+The scanner keeps 2 seconds of contiguous IQ history and, after a qualified RF
+event, saves the history plus at least 1 second after the last related event.
+Nearby channel hops are coalesced into one bounded (maximum 5 second) CU8/SigMF
+capture with the burst evidence embedded in its annotations.
+
 This is RF evidence, not protocol identification or payload decoding. Preserve
 IQ from promising events before changing bandwidth, gain, or frequency
 correction; one short observation is not enough evidence for automatic tuning.
@@ -234,8 +245,9 @@ The UI exposes the same exports as download buttons on the relevant pages.
 
 ## 12. Enabling limited IQ recording
 
-IQ recording is **off by default**. To capture short IQ snippets (with SigMF-style
-metadata) under `RECORDING_PATH`, set in `.env`:
+IQ recording is **off by default** (the deliberately applied Wavenis preset turns
+it on with a 2 GB cap). To capture short IQ snippets with SigMF-style metadata
+under `RECORDING_PATH`, set in `.env`:
 
 ```ini
 ENABLE_IQ_RECORDING=true
@@ -249,6 +261,10 @@ curl -X POST http://localhost:8080/api/recordings/start \
   -H 'Content-Type: application/json' \
   -d '{"duration_ms": 2000, "center_hz": 868300000}'
 ```
+
+While a scan is active, this endpoint copies from the scanner's rolling IQ
+history instead of issuing a competing read or retuning the device. Stop the
+scan first if you need a different centre frequency or a longer manual capture.
 
 Recordings are intentionally **limited** (short, capped, pruned by
 `MAX_IQ_STORAGE_GB` / `RETENTION_DAYS`) — IQ data grows fast. Manage them with

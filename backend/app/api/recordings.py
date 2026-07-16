@@ -35,18 +35,42 @@ async def start_recording(
 
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None,
-            lambda: ctx.recorder.capture(
-                backend,
-                center_hz=center,
-                duration_ms=duration,
-                sample_rate=cfg.sample_rate,
-                gain=cfg.gain,
-                reason="manual",
-                fmt=body.format,
-            ),
-        )
+        if ctx.scan_manager.scanning:
+            buffered = ctx.scan_manager.recent_iq(duration)
+            if buffered is None:
+                raise RuntimeError(
+                    "not enough contiguous live IQ is buffered yet; wait briefly or stop the scan"
+                )
+            iq, live_center, sample_rate, gain = buffered
+            if body.center_hz is not None and body.center_hz != live_center:
+                raise RuntimeError(
+                    "cannot retune for a manual recording while the scanner owns the SDR"
+                )
+            center = live_center
+            result = await loop.run_in_executor(
+                None,
+                lambda: ctx.recorder.capture_iq(
+                    iq,
+                    center_hz=live_center,
+                    sample_rate=sample_rate,
+                    gain=gain,
+                    reason="manual-live-buffer",
+                    fmt=body.format,
+                ),
+            )
+        else:
+            result = await loop.run_in_executor(
+                None,
+                lambda: ctx.recorder.capture(
+                    backend,
+                    center_hz=center,
+                    duration_ms=duration,
+                    sample_rate=cfg.sample_rate,
+                    gain=cfg.gain,
+                    reason="manual",
+                    fmt=body.format,
+                ),
+            )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

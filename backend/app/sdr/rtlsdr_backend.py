@@ -7,6 +7,9 @@ fall back to simulation. RECEIVE-ONLY: only tuning + sample capture.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
+
 import numpy as np
 
 from .base import SdrBackend, SdrInfo, TuneRange
@@ -51,6 +54,8 @@ class RtlSdrBackend(SdrBackend):
         self._gain = gain
         self._ppm = int(ppm)
         self._dev: RtlSdr | None = None  # type: ignore[valid-type]
+        self._applied_center_hz: int | None = None
+        self._applied_sample_rate: int | None = None
 
     def open(self) -> None:
         if self._dev is not None:
@@ -72,6 +77,8 @@ class RtlSdrBackend(SdrBackend):
                 self._dev.close()
             finally:
                 self._dev = None
+                self._applied_center_hz = None
+                self._applied_sample_rate = None
 
     def _require(self) -> RtlSdr:  # type: ignore[valid-type]
         if self._dev is None:
@@ -83,15 +90,40 @@ class RtlSdrBackend(SdrBackend):
         samples = dev.read_samples(int(n))
         return np.asarray(samples, dtype=np.complex64)
 
+    def stream_iq(
+        self,
+        n: int,
+        callback: Callable[[np.ndarray], None],
+        stop_event: threading.Event,
+    ) -> None:  # pragma: no cover - requires hardware
+        """Use librtlsdr's continuous async transfer rather than repeated reads."""
+        dev = self._require()
+
+        def on_samples(samples: np.ndarray, _context: object = None) -> None:
+            if stop_event.is_set():
+                dev.cancel_read_async()
+                return
+            callback(np.asarray(samples, dtype=np.complex64))
+
+        dev.read_samples_async(on_samples, num_samples=int(n))
+
+    def cancel_stream(self) -> None:  # pragma: no cover - requires hardware
+        if self._dev is not None:
+            self._dev.cancel_read_async()
+
     def set_center_freq(self, hz: int) -> None:
-        self._center_hz = int(hz)
-        if self._dev is not None:  # pragma: no cover
-            self._dev.center_freq = int(hz)
+        hz = int(hz)
+        self._center_hz = hz
+        if self._dev is not None and hz != self._applied_center_hz:  # pragma: no cover
+            self._dev.center_freq = hz
+            self._applied_center_hz = hz
 
     def set_sample_rate(self, sps: int) -> None:
-        self._sample_rate = int(sps)
-        if self._dev is not None:  # pragma: no cover
-            self._dev.sample_rate = int(sps)
+        sps = int(sps)
+        self._sample_rate = sps
+        if self._dev is not None and sps != self._applied_sample_rate:  # pragma: no cover
+            self._dev.sample_rate = sps
+            self._applied_sample_rate = sps
 
     def set_gain(self, gain: str | float) -> None:
         self._gain = gain
@@ -103,7 +135,7 @@ class RtlSdrBackend(SdrBackend):
 
     def set_ppm(self, ppm: int) -> None:
         self._ppm = int(ppm)
-        if self._dev is not None and ppm:  # pragma: no cover
+        if self._dev is not None:  # pragma: no cover
             self._dev.freq_correction = int(ppm)
 
     @property

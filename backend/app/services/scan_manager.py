@@ -48,8 +48,10 @@ from ..utils import iso_now, utcnow
 from ..websocket.manager import ConnectionManager
 from .control_lease import ControlLease
 from .decoder import DecodedMessage, ReceiveOnlyDecoder
+from .iq_stream import ContinuousIqStream
 from .recorder import Recorder
 from .retention import RetentionService
+from .triggered_capture import TriggeredCapture, TriggeredCaptureBuffer
 
 log = structlog.get_logger(__name__)
 
@@ -142,6 +144,13 @@ class ScanManager:
         # window, so hopping channels are observed continuously rather than by
         # a tuner sweep.
         self._wavenis = WavenisWidebandAnalyzer()
+        self._iq_stream: ContinuousIqStream | None = None
+        self._last_stream_status: dict[str, object] | None = None
+        self._expected_stream_sample: int | None = None
+        self._trigger_capture = TriggeredCaptureBuffer(self._config.sample_rate)
+        self._polled_blocks = 0
+        self._polled_samples = 0
+        self._retunes = 0
 
     # ------------------------------------------------------------------ config
     @staticmethod
@@ -311,6 +320,12 @@ class ScanManager:
 
         self._noise.reset()
         self._wavenis.reset()
+        self._trigger_capture = TriggeredCaptureBuffer(self._config.sample_rate)
+        self._expected_stream_sample = None
+        self._last_stream_status = None
+        self._polled_blocks = 0
+        self._polled_samples = 0
+        self._retunes = 0
         self._stop_event.clear()
         self._compute_sweep_plan()
         self._reset_band_buffer()
@@ -337,6 +352,9 @@ class ScanManager:
             return
         self._scanning = False
         self._stop_event.set()
+        if self._iq_stream is not None:
+            self._last_stream_status = dict(self._iq_stream.snapshot())
+            self._iq_stream.stop()
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
@@ -405,10 +423,30 @@ class ScanManager:
             merged[key] = value
         new_config = schemas.ScanConfig(**merged)  # re-validates ranges
 
+        acquisition_changed = any(
+            getattr(new_config, field) != getattr(prev, field)
+            for field in (
+                "start_hz",
+                "end_hz",
+                "step_hz",
+                "sample_rate",
+                "gain",
+                "ppm",
+                "dwell_ms",
+                "backend",
+                "device_index",
+                "simulation",
+            )
+        )
+        restart_scan = self._scanning and acquisition_changed
+        if restart_scan:
+            await self.stop_scan()
+
         self._config = new_config
         self._version += 1
         self._noise = NoiseFloorEstimator(alpha=new_config.noise_floor_alpha)
         self._wavenis.reset()
+        self._trigger_capture = TriggeredCaptureBuffer(new_config.sample_rate)
         self._clusterer = ChannelClusterer(proximity_hz=self._proximity_hz())
         self._compute_sweep_plan()  # band/step/sample-rate may have changed
         self._reset_band_buffer()
@@ -455,6 +493,8 @@ class ScanManager:
         )
         self._ws.broadcast_config(self.config_dict(), self._version, client_id)
         log.info("config.updated", version=self._version, client_id=client_id)
+        if restart_scan:
+            await self.start_scan()
         return new_config
 
     # ------------------------------------------------------------- scan loop
@@ -469,25 +509,75 @@ class ScanManager:
 
                 # Read IQ + compute PSD OFF the event loop.
                 try:
-                    result = await loop.run_in_executor(None, self._read_and_psd, center, n)
+                    if self._should_stream_continuously():
+                        if self._iq_stream is None:
+                            self._iq_stream = ContinuousIqStream(
+                                self._backend,
+                                center_hz=center,
+                                sample_rate=self._config.sample_rate,
+                                block_samples=n,
+                            )
+                            self._iq_stream.start()
+                        block = await self._iq_stream.get()
+                        if block is None:
+                            if self._stop_event.is_set():
+                                break
+                            error = (
+                                self._iq_stream.snapshot().get("error")
+                                or "continuous SDR stream ended unexpectedly"
+                            )
+                            self._last_stream_status = dict(self._iq_stream.snapshot())
+                            self._iq_stream.stop()
+                            self._iq_stream = None
+                            self._expected_stream_sample = None
+                            raise RuntimeError(error)
+                        if (
+                            self._expected_stream_sample is not None
+                            and block.start_sample != self._expected_stream_sample
+                        ):
+                            missing = max(0, block.start_sample - self._expected_stream_sample)
+                            self._wavenis.discontinuity(missing)
+                            self._trigger_capture.discontinuity()
+                        self._expected_stream_sample = block.end_sample
+                        iq = block.samples
+                        result = await loop.run_in_executor(None, self._analyse_iq, iq, center)
+                    else:
+                        if self._iq_stream is not None:
+                            self._last_stream_status = dict(self._iq_stream.snapshot())
+                            self._iq_stream.stop()
+                            self._iq_stream = None
+                            self._expected_stream_sample = None
+                        iq, *analysis = await loop.run_in_executor(
+                            None, self._read_and_psd, center, n
+                        )
+                        result = tuple(analysis)
                 except Exception as exc:  # noqa: BLE001
                     log.warning("scan.dsp_error", error=str(exc))
                     await asyncio.sleep(0.05)
                     continue
 
                 freqs, power_db, envelope_db, modulation, wavenis_bursts = result
+                if self._wavenis_profile_configured() and WavenisWidebandAnalyzer.can_observe(
+                    center, self._config.sample_rate
+                ):
+                    self._trigger_capture.append(iq)
                 self.metrics.record_fft()
 
                 floor = self._noise.update(power_db)
                 await self._process_frame(freqs, power_db, floor, center, span)
                 for burst in wavenis_bursts:
                     if burst.qualified:
+                        if self._recorder is not None and self._recorder.enabled:
+                            self._trigger_capture.trigger(burst.to_dict())
                         await self._emit_event(
                             "wavenis_burst",
                             f"ch={burst.channel_index} f={burst.freq_hz} "
                             f"duration={burst.duration_ms:.2f}ms snr={burst.peak_snr_db:.1f}dB",
                             data=burst.to_dict(),
                         )
+                capture = self._trigger_capture.pop_ready()
+                if capture is not None and self._recorder is not None and self._recorder.enabled:
+                    await self._save_triggered_capture(capture, center)
                 # Live scope: fine spectrogram + envelope of the focused window.
                 if self._mode == "focus":
                     if modulation is not None and modulation["modulation"] != "unknown":
@@ -516,6 +606,10 @@ class ScanManager:
             log.error("scan.loop_crashed", error=str(exc))
             await self._emit_event("error", f"scan loop crashed: {exc}")
         finally:
+            if self._iq_stream is not None:
+                self._last_stream_status = dict(self._iq_stream.snapshot())
+                self._iq_stream.stop()
+                self._iq_stream = None
             log.info("scan.loop_exit")
 
     def _read_and_psd(
@@ -524,11 +618,11 @@ class ScanManager:
         np.ndarray,
         np.ndarray,
         np.ndarray,
+        np.ndarray,
         ModulationEstimate | None,
         list[WavenisBurst],
     ]:
-        """Blocking: runs in executor thread. Returns
-        (freqs_hz, power_db, envelope_db, modulation, Wavenis bursts).
+        """Blocking: runs in executor thread. Returns IQ plus its analysis.
 
         envelope_db is the decimated |IQ| magnitude over the dwell, in dB, used for
         the time-domain amplitude strip in the live scope. modulation is a coarse
@@ -536,8 +630,25 @@ class ScanManager:
         otherwise) so raw IQ never has to leave the backend.
         """
         assert self._backend is not None
-        self._backend.set_center_freq(center)
+        if self._backend.center_freq != center:
+            self._backend.set_center_freq(center)
+            self._retunes += 1
         iq = self._backend.read_iq(n)
+        self._polled_blocks += 1
+        self._polled_samples += int(iq.size)
+        analysis = self._analyse_iq(iq, center)
+        return iq, *analysis
+
+    def _analyse_iq(
+        self, iq: np.ndarray, center: int
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        ModulationEstimate | None,
+        list[WavenisBurst],
+    ]:
+        """Run DSP for an already-acquired IQ block without touching the SDR."""
         wavenis_bursts: list[WavenisBurst] = []
         if self._wavenis_profile_configured() and WavenisWidebandAnalyzer.can_observe(
             center, self._config.sample_rate
@@ -790,6 +901,15 @@ class ScanManager:
         await self._broadcast_status()
 
     # ------------------------------------------------------------- Wavenis
+    def _should_stream_continuously(self) -> bool:
+        """Native continuous mode is safe only while parked on one RTL window."""
+        return (
+            self._backend is not None
+            and self._backend.name == "rtlsdr"
+            and self._mode == "sweep"
+            and len(self._sweep_centers) == 1
+        )
+
     def _wavenis_profile_configured(self) -> bool:
         """Whether one instantaneous receiver window covers the whole grid."""
         band_width = self._config.end_hz - self._config.start_hz
@@ -798,6 +918,79 @@ class ScanManager:
             and self._config.start_hz <= WAVENIS_CHANNELS_HZ[0]
             and self._config.end_hz >= WAVENIS_CHANNELS_HZ[-1]
         )
+
+    async def _save_triggered_capture(self, capture: TriggeredCapture, center_hz: int) -> None:
+        assert self._recorder is not None
+        loop = asyncio.get_running_loop()
+        annotation = {
+            "core:sample_start": 0,
+            "core:sample_count": int(capture.samples.size),
+            "core:comment": "Qualified wideband RF events; protocol identity unconfirmed",
+            "channel_detector:wavenis_bursts": capture.triggers,
+        }
+        result = await loop.run_in_executor(
+            None,
+            lambda: self._recorder.capture_iq(
+                capture.samples,
+                center_hz=center_hz,
+                sample_rate=self._config.sample_rate,
+                gain=self._config.gain,
+                reason="wavenis-qualified-burst",
+                fmt="cu8",
+                annotations=[annotation],
+            ),
+        )
+        rec = schemas.Recording(
+            id=0,
+            timestamp=result.timestamp,
+            path=result.path,
+            center_hz=result.center_hz,
+            sample_rate=result.sample_rate,
+            gain=result.gain,
+            duration_ms=result.duration_ms,
+            format=result.format,
+            bytes=result.bytes,
+            sigmf_meta=result.sigmf_meta,
+        )
+        rec_id = await self._repos.recordings.create(rec)
+        await self._emit_event(
+            "wavenis_capture",
+            f"recording #{rec_id}: {len(capture.triggers)} qualified burst(s), "
+            f"{result.duration_ms} ms",
+            data={
+                "recording_id": rec_id,
+                "trigger_count": len(capture.triggers),
+                "duration_ms": result.duration_ms,
+                "bytes": result.bytes,
+            },
+        )
+
+    def recent_iq(self, duration_ms: int) -> tuple[np.ndarray, int, int, str] | None:
+        """Return buffered live IQ for a race-free manual recording."""
+        iq = self._trigger_capture.recent(duration_ms)
+        if iq is None:
+            return None
+        return iq, self._current_center(), self._config.sample_rate, self._config.gain
+
+    def _acquisition_status(self) -> dict[str, object]:
+        if self._iq_stream is not None:
+            return dict(self._iq_stream.snapshot())
+        if self._last_stream_status is not None and self._polled_blocks == 0:
+            return self._last_stream_status
+        return {
+            "mode": "bounded_reads",
+            "blocks_acquired": self._polled_blocks,
+            "samples_acquired": self._polled_samples,
+            "sample_cursor": self._polled_samples,
+            "queue_depth": 0,
+            "queue_capacity": 0,
+            "dropped_blocks": 0,
+            "dropped_samples": 0,
+            "timing_gaps": 0,
+            "estimated_gap_samples": 0,
+            "retunes": self._retunes,
+            "error": None,
+        }
 
     def wavenis_status(self) -> dict[str, object]:
         configured = self._wavenis_profile_configured()
@@ -812,6 +1005,12 @@ class ScanManager:
                 "active": bool(self._scanning and observable),
                 "receiver_center_hz": center,
                 "sample_rate": self._config.sample_rate,
+                "acquisition": self._acquisition_status(),
+                "capture": {
+                    **self._trigger_capture.snapshot(),
+                    "enabled": bool(self._recorder and self._recorder.enabled),
+                    "format": "cu8",
+                },
                 "message": (
                     "continuously observing all 15 candidate channels"
                     if self._scanning and observable

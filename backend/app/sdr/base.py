@@ -7,6 +7,8 @@ receiver and reading complex IQ samples. No method transmits.
 from __future__ import annotations
 
 import abc
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -111,6 +113,25 @@ class SdrBackend(abc.ABC):
     def supports_bandwidth(self, bw_hz: int) -> bool:
         """Whether a requested capture bandwidth fits within the sample rate."""
         return 0 < bw_hz <= self.sample_rate
+
+    def stream_iq(
+        self,
+        n: int,
+        callback: Callable[[np.ndarray], None],
+        stop_event: threading.Event,
+    ) -> None:
+        """Continuously deliver IQ blocks until ``stop_event`` is set.
+
+        The generic implementation preserves one owner for backend reads. Real
+        backends may override this with a device-native asynchronous stream.
+        This method is blocking and must run in its own worker thread.
+        """
+        while not stop_event.is_set():
+            callback(self.read_iq(n))
+
+    def cancel_stream(self) -> None:
+        """Interrupt a device-native stream, if the backend has one."""
+        return None
 
     def __enter__(self) -> SdrBackend:
         self.open()

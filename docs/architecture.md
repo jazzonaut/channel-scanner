@@ -87,13 +87,22 @@ task feeding the WebSocket hub; the hub fans out throttled `spectrum`
 (`SPECTRUM_FPS`, `SPECTRUM_BINS`) and `channels`/`event`/`status` messages to all
 connected clients. Writes to SQLite are serialized through the storage layer.
 
+For a parked real RTL-SDR window, `ContinuousIqStream` is the single owner of
+device reads and uses the native librtlsdr callback stream from a worker thread.
+A bounded queue hands sequence-numbered blocks to DSP; dropped blocks therefore
+produce an explicit sample discontinuity instead of silently splicing IQ. Sweep
+mode retains bounded synchronous reads because retuning is part of that mode.
+Manual and event-triggered recordings copy IQ already held by the rolling buffer
+and never issue a second device read while scanning.
+
 ## Persistence
 
 SQLite at `DATABASE_PATH` (default `/data/db/channel_detector.sqlite3`) holds
 sessions, detections, candidate channels, events and recording metadata. IQ
 recordings (when `ENABLE_IQ_RECORDING=true`) are written under `RECORDING_PATH`
 with SigMF-style metadata. Retention (`RETENTION_DAYS`, `MAX_IQ_STORAGE_GB`)
-prunes old rows and files.
+prunes old rows and files. Qualified Wavenis observations coalesce into bounded
+CU8 captures containing pre/post-trigger IQ and evidence annotations.
 
 See also: [signal-detection.md](signal-detection.md),
 [usb-passthrough.md](usb-passthrough.md), [troubleshooting.md](troubleshooting.md).

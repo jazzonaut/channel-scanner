@@ -185,7 +185,41 @@ export function Investigate(): JSX.Element {
                   {(wavenis.receiver_center_hz / 1e6).toFixed(3)} MHz @{' '}
                   {(wavenis.sample_rate / 1e6).toFixed(1)} MS/s
                 </span>
+                {wavenis.acquisition && (
+                  <span className="small">
+                    <strong>
+                      {wavenis.acquisition.mode === 'native_continuous'
+                        ? 'continuous stream'
+                        : 'bounded reads'}
+                    </strong>{' '}
+                    · {wavenis.acquisition.dropped_blocks} dropped ·{' '}
+                    {wavenis.acquisition.timing_gaps} timing gaps
+                  </span>
+                )}
+                {wavenis.capture && (
+                  <span className="small">
+                    <strong>
+                      {wavenis.capture.enabled
+                        ? wavenis.capture.capture_pending
+                          ? `capturing (${wavenis.capture.pending_triggers} triggers)`
+                          : `${wavenis.capture.captures_completed} IQ captures`
+                        : 'IQ capture off'}
+                    </strong>{' '}
+                    · {wavenis.capture.buffered_seconds.toFixed(1)} s buffered
+                  </span>
+                )}
               </div>
+              {wavenis.acquisition?.error && (
+                <div className="notice danger" style={{ marginTop: 12 }}>
+                  SDR stream error: {wavenis.acquisition.error}
+                </div>
+              )}
+              {wavenis.capture && !wavenis.capture.enabled && (
+                <div className="notice warn" style={{ marginTop: 12 }}>
+                  Qualified events are visible but raw IQ is not being preserved. Enable IQ recording
+                  in Settings (the Wavenis preset enables it with capped retention).
+                </div>
+              )}
               <div className="row" style={{ gap: 5, marginTop: 12, flexWrap: 'wrap' }}>
                 {wavenis.channels.map((channel) => (
                   <span

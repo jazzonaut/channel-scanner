@@ -232,7 +232,8 @@ export function Settings(): JSX.Element {
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
           Wavenis: parks one 2.4 MS/s window across the full 15-channel candidate grid for
-          continuous hop evidence. Near-device: conservative settings for close strong emitters.
+          continuous hop evidence and enables capped triggered IQ retention. Near-device:
+          conservative settings for close strong emitters.
           Long-duration survey: long dwell + low threshold to catch infrequent transmissions.
         </p>
       </div>
