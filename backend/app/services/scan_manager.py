@@ -572,14 +572,18 @@ class ScanManager:
                 floor = self._noise.update(power_db)
                 await self._process_frame(freqs, power_db, floor, center, span)
                 for burst in wavenis_bursts:
-                    if burst.qualified and self._recorder is not None and self._recorder.enabled:
+                    # Record IQ and persist/announce only for auto-flagged
+                    # candidates. Triggering on every qualified burst would keep
+                    # the recorder firing almost continuously in a busy band (a
+                    # dense neighbour is ~9/s), churning IQ storage until the
+                    # rare meter capture we actually want is evicted -- and would
+                    # flood the event DB over a multi-hour run. Routine qualified
+                    # bursts still appear in the live view and snapshot.
+                    if not burst.is_candidate:
+                        continue
+                    if self._recorder is not None and self._recorder.enabled:
                         self._trigger_capture.trigger(burst.to_dict())
-                    # Only auto-flagged candidates are persisted/announced.
-                    # Routine qualified bursts stay in the live view + IQ
-                    # captures; emitting an event per burst would flood the DB
-                    # over a multi-hour run (a dense neighbour is ~9/s).
-                    if burst.is_candidate:
-                        await self._record_candidate(burst)
+                    await self._record_candidate(burst)
                 capture = self._trigger_capture.pop_ready()
                 if capture is not None and self._recorder is not None and self._recorder.enabled:
                     await self._save_triggered_capture(capture, center)
@@ -995,7 +999,7 @@ class ScanManager:
         rec_id = await self._repos.recordings.create(rec)
         await self._emit_event(
             "wavenis_capture",
-            f"recording #{rec_id}: {len(capture.triggers)} qualified burst(s), "
+            f"recording #{rec_id}: {len(capture.triggers)} candidate burst(s), "
             f"{result.duration_ms} ms",
             data={
                 "recording_id": rec_id,
