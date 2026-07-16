@@ -38,6 +38,11 @@ from ..signal_processing.modulation import (
 )
 from ..signal_processing.noise_floor import NoiseFloorEstimator
 from ..signal_processing.recurrence import RecurrenceTracker
+from ..signal_processing.wavenis import (
+    WAVENIS_CHANNELS_HZ,
+    WavenisBurst,
+    WavenisWidebandAnalyzer,
+)
 from ..storage.repositories import Repositories
 from ..utils import iso_now, utcnow
 from ..websocket.manager import ConnectionManager
@@ -131,6 +136,12 @@ class ScanManager:
         self._band_freqs: np.ndarray | None = None
         self._band_power: np.ndarray | None = None
         self._band_floor: float = -120.0
+
+        # Dedicated evidence path for the 15-channel Wavenis grid. It is active
+        # only when the configured band fits inside one instantaneous RTL-SDR
+        # window, so hopping channels are observed continuously rather than by
+        # a tuner sweep.
+        self._wavenis = WavenisWidebandAnalyzer()
 
     # ------------------------------------------------------------------ config
     @staticmethod
@@ -299,6 +310,7 @@ class ScanManager:
         assert self._backend is not None
 
         self._noise.reset()
+        self._wavenis.reset()
         self._stop_event.clear()
         self._compute_sweep_plan()
         self._reset_band_buffer()
@@ -396,6 +408,7 @@ class ScanManager:
         self._config = new_config
         self._version += 1
         self._noise = NoiseFloorEstimator(alpha=new_config.noise_floor_alpha)
+        self._wavenis.reset()
         self._clusterer = ChannelClusterer(proximity_hz=self._proximity_hz())
         self._compute_sweep_plan()  # band/step/sample-rate may have changed
         self._reset_band_buffer()
@@ -462,11 +475,19 @@ class ScanManager:
                     await asyncio.sleep(0.05)
                     continue
 
-                freqs, power_db, envelope_db, modulation = result
+                freqs, power_db, envelope_db, modulation, wavenis_bursts = result
                 self.metrics.record_fft()
 
                 floor = self._noise.update(power_db)
                 await self._process_frame(freqs, power_db, floor, center, span)
+                for burst in wavenis_bursts:
+                    if burst.qualified:
+                        await self._emit_event(
+                            "wavenis_burst",
+                            f"ch={burst.channel_index} f={burst.freq_hz} "
+                            f"duration={burst.duration_ms:.2f}ms snr={burst.peak_snr_db:.1f}dB",
+                            data=burst.to_dict(),
+                        )
                 # Live scope: fine spectrogram + envelope of the focused window.
                 if self._mode == "focus":
                     if modulation is not None and modulation["modulation"] != "unknown":
@@ -499,9 +520,15 @@ class ScanManager:
 
     def _read_and_psd(
         self, center: int, n: int
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, ModulationEstimate | None]:
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        ModulationEstimate | None,
+        list[WavenisBurst],
+    ]:
         """Blocking: runs in executor thread. Returns
-        (freqs_hz, power_db, envelope_db, modulation).
+        (freqs_hz, power_db, envelope_db, modulation, Wavenis bursts).
 
         envelope_db is the decimated |IQ| magnitude over the dwell, in dB, used for
         the time-domain amplitude strip in the live scope. modulation is a coarse
@@ -511,6 +538,13 @@ class ScanManager:
         assert self._backend is not None
         self._backend.set_center_freq(center)
         iq = self._backend.read_iq(n)
+        wavenis_bursts: list[WavenisBurst] = []
+        if self._wavenis_profile_configured() and WavenisWidebandAnalyzer.can_observe(
+            center, self._config.sample_rate
+        ):
+            wavenis_bursts = self._wavenis.process(
+                iq, center_hz=center, sample_rate=self._config.sample_rate
+            )
         result = psd_mod.compute_psd(
             iq,
             center_hz=center,
@@ -537,7 +571,7 @@ class ScanManager:
                 seg = iq[:131072]
                 iso, rate2 = isolate_and_decimate(seg, int(self._config.sample_rate), 60_000.0)
                 modulation = estimate_modulation(iso, int(rate2))
-        return result.freqs_hz, result.power_db, env_db, modulation
+        return result.freqs_hz, result.power_db, env_db, modulation, wavenis_bursts
 
     async def _process_frame(
         self,
@@ -755,6 +789,40 @@ class ScanManager:
         # Keep the dashboard (device, live metrics, scanning state) fresh ~1/s.
         await self._broadcast_status()
 
+    # ------------------------------------------------------------- Wavenis
+    def _wavenis_profile_configured(self) -> bool:
+        """Whether one instantaneous receiver window covers the whole grid."""
+        band_width = self._config.end_hz - self._config.start_hz
+        return (
+            band_width <= self._config.sample_rate
+            and self._config.start_hz <= WAVENIS_CHANNELS_HZ[0]
+            and self._config.end_hz >= WAVENIS_CHANNELS_HZ[-1]
+        )
+
+    def wavenis_status(self) -> dict[str, object]:
+        configured = self._wavenis_profile_configured()
+        center = self._current_center()
+        observable = configured and WavenisWidebandAnalyzer.can_observe(
+            center, self._config.sample_rate
+        )
+        snapshot = self._wavenis.snapshot()
+        snapshot.update(
+            {
+                "configured": configured,
+                "active": bool(self._scanning and observable),
+                "receiver_center_hz": center,
+                "sample_rate": self._config.sample_rate,
+                "message": (
+                    "continuously observing all 15 candidate channels"
+                    if self._scanning and observable
+                    else "profile ready; start the scan"
+                    if observable
+                    else "apply the Wavenis 868 preset so the grid fits one receiver window"
+                ),
+            }
+        )
+        return snapshot
+
     # ------------------------------------------------------------- decoder
     def _make_sim_decode(self) -> schemas.DecodeFrame:
         """Synthesize a plausible decoded meter reading (simulation only)."""
@@ -853,7 +921,7 @@ class ScanManager:
             await self.stop_scan()
         try:
             loop = asyncio.get_running_loop()
-            freqs, power_db, _env, _mod = await loop.run_in_executor(
+            freqs, power_db, _env, _mod, _wavenis = await loop.run_in_executor(
                 None, self._read_and_psd, int(reference_hz), self._dwell_samples()
             )
         finally:

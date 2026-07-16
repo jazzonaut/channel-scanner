@@ -219,6 +219,9 @@ export function Settings(): JSX.Element {
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h2 style={{ margin: 0 }}>Presets</h2>
           <div className="row">
+            <button onClick={() => applyPreset('wavenis-868')} disabled={disabled}>
+              Wavenis 868 wideband
+            </button>
             <button onClick={() => applyPreset('near-device')} disabled={disabled}>
               Near-device investigation
             </button>
@@ -228,7 +231,8 @@ export function Settings(): JSX.Element {
           </div>
         </div>
         <p className="hint" style={{ marginTop: 8 }}>
-          Near-device: conservative, longer dwell and higher threshold for close strong emitters.
+          Wavenis: parks one 2.4 MS/s window across the full 15-channel candidate grid for
+          continuous hop evidence. Near-device: conservative settings for close strong emitters.
           Long-duration survey: long dwell + low threshold to catch infrequent transmissions.
         </p>
       </div>

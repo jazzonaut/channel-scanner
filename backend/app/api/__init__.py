@@ -21,6 +21,7 @@ from . import (
     recordings,
     scan,
     sessions,
+    wavenis,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -40,5 +41,6 @@ api_router.include_router(data.router)
 api_router.include_router(decoder.router)
 api_router.include_router(occupancy.router)
 api_router.include_router(calibrate.router)
+api_router.include_router(wavenis.router)
 
 __all__ = ["api_router"]

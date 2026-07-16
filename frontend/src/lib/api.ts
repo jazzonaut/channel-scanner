@@ -25,6 +25,7 @@ import type {
   ScanConfigVersioned,
   ScanStartResponse,
   Session,
+  WavenisStatus,
 } from './types';
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
@@ -188,6 +189,9 @@ export const api = {
 
   calibrate: (referenceHz: number, searchHz = 50_000): Promise<CalibrateResponse> =>
     request('/api/calibrate', jsonBody({ reference_hz: referenceHz, search_hz: searchHz })),
+
+  // --- Wavenis 868 wideband evidence (receive-only) ---
+  getWavenisStatus: (): Promise<WavenisStatus> => request('/api/wavenis'),
 };
 
 export type Api = typeof api;

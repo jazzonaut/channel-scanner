@@ -8,6 +8,7 @@ const startScan = vi.fn();
 const stopScan = vi.fn();
 const focus = vi.fn();
 const runDecoder = vi.fn();
+const getWavenisStatus = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -15,6 +16,7 @@ vi.mock('../lib/api', () => ({
     stopScan: () => stopScan(),
     focus: (centerHz: number) => focus(centerHz),
     runDecoder: () => runDecoder(),
+    getWavenisStatus: () => getWavenisStatus(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -57,6 +59,8 @@ beforeEach(() => {
   stopScan.mockReset();
   focus.mockReset();
   runDecoder.mockReset();
+  getWavenisStatus.mockReset();
+  getWavenisStatus.mockImplementation(() => new Promise(() => {}));
   useStore.getState().setChannels([]);
   useStore.getState().setScanning(false);
 });
@@ -110,5 +114,25 @@ describe('Investigate page', () => {
     renderInvestigate();
     await userEvent.click(screen.getByRole('button', { name: /Run decoder/i }));
     expect(await screen.findByText('Decoder ran')).toBeInTheDocument();
+  });
+
+  it('shows when the Wavenis profile is required', async () => {
+    getWavenisStatus.mockResolvedValue({
+      configured: false,
+      active: false,
+      message: 'apply preset',
+      center_hz: 868_269_000,
+      receiver_center_hz: 868_500_000,
+      sample_rate: 2_400_000,
+      grid_hz: [],
+      threshold_db: 12,
+      frame_ms: null,
+      frames_processed: 0,
+      channels: [],
+      recent_bursts: [],
+    });
+    renderInvestigate();
+    expect(await screen.findByText('Wavenis 868 wideband evidence')).toBeInTheDocument();
+    expect(screen.getByText('Apply Wavenis 868 preset')).toBeInTheDocument();
   });
 });

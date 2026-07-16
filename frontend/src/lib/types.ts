@@ -244,6 +244,45 @@ export interface CalibrateResponse {
   peak_snr_db?: number;
 }
 
+export interface WavenisChannelEvidence {
+  index: number;
+  freq_hz: number;
+  noise_db: number | null;
+  active: boolean;
+  observations: number;
+  qualified_observations: number;
+  last_seen_s: number | null;
+  peak_snr_db: number;
+}
+
+export interface WavenisBurstEvidence {
+  sequence: number;
+  channel_index: number;
+  freq_hz: number;
+  start_s: number;
+  duration_ms: number;
+  peak_snr_db: number;
+  noise_db: number;
+  above_frames: number;
+  qualified: boolean;
+  freq_offset_hz: number;
+}
+
+export interface WavenisStatus {
+  configured: boolean;
+  active: boolean;
+  message: string;
+  center_hz: number;
+  receiver_center_hz: number;
+  sample_rate: number;
+  grid_hz: number[];
+  threshold_db: number;
+  frame_ms: number | null;
+  frames_processed: number;
+  channels: WavenisChannelEvidence[];
+  recent_bursts: WavenisBurstEvidence[];
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket protocol (/ws/live)
 // ---------------------------------------------------------------------------

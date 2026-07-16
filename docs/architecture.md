@@ -17,6 +17,7 @@ flowchart TD
     subgraph BACKEND["Backend (FastAPI + uvicorn, :8080)"]
       SDR["SDR backend\napp/sdr/*\n(sim | rtlsdr | soapy | rtl_power)"]
       DSP["Signal processing\napp/signal_processing/*\nnoise floor → PSD → detector\n→ clustering → recurrence → fingerprint"]
+      WAV["Wavenis wideband evidence\n15 simultaneous channels\nnoise → bursts → hop chronology"]
       SCAN["Scan manager\napp/services/scan_manager.py\n(tuning, dwell, sessions)"]
       LEASE["Control lease\napp/services/control_lease.py"]
       REC["Recorder\napp/services/recorder.py"]
@@ -35,7 +36,9 @@ flowchart TD
 
     DONGLE -->|IQ / power samples| SDR
     SDR -->|frames| DSP
+    SDR -->|single-window IQ| WAV
     DSP -->|detections, channels| SCAN
+    WAV -->|qualified passive evidence| SCAN
     SCAN --> DB
     SCAN -->|spectrum, channel updates| WS
     SCAN --> REC

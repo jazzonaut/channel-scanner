@@ -275,6 +275,20 @@ export function configToForm(c: ScanConfig): SettingsFormValues {
 }
 
 export const PRESETS: Record<string, Partial<SettingsFormValues>> = {
+  'wavenis-868': {
+    startMhz: '867.569',
+    endMhz: '868.969',
+    stepHz: '0',
+    sampleRate: '2400000',
+    gain: 'auto',
+    dwellMs: '100',
+    thresholdDb: '12',
+    noiseFloorAlpha: '0.02',
+    knownWidthsHz: '50000',
+    fftSize: '4096',
+    spectrumFps: '10',
+    spectrumBins: '2048',
+  },
   'near-device': {
     stepHz: '0',
     sampleRate: '2400000',

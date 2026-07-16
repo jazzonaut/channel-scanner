@@ -166,6 +166,25 @@ Or change it live in the UI **Settings** page (requires the control lease) — v
 `PUT /api/config`. Start/stop with the UI or `POST /api/scan/start` /
 `POST /api/scan/stop`. Exclude sub-ranges with `exclusions` in the config.
 
+### Wavenis 868 wideband profile
+
+The Settings page includes a **Wavenis 868 wideband** preset for passive
+investigation of the candidate 15-channel grid at 867.569–868.969 MHz. That
+1.4 MHz span fits inside one 2.4 MS/s RTL-SDR window, so the tuner stays parked
+at 868.269 MHz and observes every candidate channel on the same continuous IQ
+timeline instead of sweeping between them.
+
+While the profile is active, the backend divides IQ into ~0.85 ms time frames,
+tracks a robust noise estimate for each channel, qualifies multi-frame bursts,
+and records chronological hop evidence plus coarse frequency offset. Live
+status is shown on **Investigate my meter** and returned by `GET /api/wavenis`.
+The initial 12 dB threshold is conservative; per-channel floors adapt without
+letting impulsive signals quickly redefine themselves as noise.
+
+This is RF evidence, not protocol identification or payload decoding. Preserve
+IQ from promising events before changing bandwidth, gain, or frequency
+correction; one short observation is not enough evidence for automatic tuning.
+
 ## 8. How channel detection works
 
 Briefly: PSD from FFT → rolling noise floor (EMA) → threshold (`> floor +

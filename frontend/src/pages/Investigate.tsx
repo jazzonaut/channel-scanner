@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/store';
@@ -6,7 +6,7 @@ import { api, ApiError } from '../lib/api';
 import { InfoTip } from '../components/InfoTip';
 import { meterScore } from '../lib/meterScore';
 import type { MeterScore } from '../lib/meterScore';
-import type { CandidateChannel } from '../lib/types';
+import type { CandidateChannel, WavenisStatus } from '../lib/types';
 import { formatConfidence, formatSnr, hzToMHz } from '../lib/format';
 import './Investigate.css';
 
@@ -54,6 +54,27 @@ export function Investigate(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [decodeBusy, setDecodeBusy] = useState(false);
   const [decodeMessage, setDecodeMessage] = useState<string | null>(null);
+  const [wavenis, setWavenis] = useState<WavenisStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const refresh = async (): Promise<void> => {
+      try {
+        const status = await api.getWavenisStatus();
+        if (!cancelled) setWavenis(status);
+      } catch {
+        // The generic scanner remains usable if an older backend lacks this
+        // optional evidence endpoint.
+      }
+    };
+    void refresh();
+    timer = setInterval(() => void refresh(), 2000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, []);
 
   const channelCount = channelMap.size;
 
@@ -123,6 +144,102 @@ export function Investigate(): JSX.Element {
         Receive-only guide. The scanner listens; it never transmits and never decrypts. Findings are
         inferred candidate channels, not confirmed devices.
       </div>
+
+      {wavenis && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Wavenis 868 wideband evidence</h2>
+              <p className="small faint" style={{ margin: '5px 0 0' }}>
+                {wavenis.message}. All 15 candidate channels are measured from the same IQ timeline;
+                qualification is RF evidence, not protocol identity.
+              </p>
+            </div>
+            <span className={`badge ${wavenis.active ? '' : 'dim'}`}>
+              {wavenis.active ? 'live' : wavenis.configured ? 'ready' : 'profile required'}
+            </span>
+          </div>
+
+          {!wavenis.configured ? (
+            <div style={{ marginTop: 12 }}>
+              <Link className="badge dim" to="/settings">
+                Apply Wavenis 868 preset
+              </Link>
+            </div>
+          ) : (
+            <>
+              <div className="row" style={{ gap: 20, marginTop: 12, flexWrap: 'wrap' }}>
+                <span className="small">
+                  <strong>{wavenis.frames_processed.toLocaleString()}</strong> time frames
+                </span>
+                <span className="small">
+                  <strong>{wavenis.frame_ms?.toFixed(3) ?? '—'} ms</strong> resolution
+                </span>
+                <span className="small">
+                  <strong>
+                    {wavenis.channels.reduce((sum, channel) => sum + channel.qualified_observations, 0)}
+                  </strong>{' '}
+                  qualified bursts
+                </span>
+                <span className="small mono">
+                  {(wavenis.receiver_center_hz / 1e6).toFixed(3)} MHz @{' '}
+                  {(wavenis.sample_rate / 1e6).toFixed(1)} MS/s
+                </span>
+              </div>
+              <div className="row" style={{ gap: 5, marginTop: 12, flexWrap: 'wrap' }}>
+                {wavenis.channels.map((channel) => (
+                  <span
+                    className={`badge ${channel.active || channel.qualified_observations > 0 ? '' : 'dim'}`}
+                    key={channel.index}
+                    title={`${(channel.freq_hz / 1e6).toFixed(3)} MHz · noise ${channel.noise_db?.toFixed(1) ?? '—'} dB · peak SNR ${channel.peak_snr_db.toFixed(1)} dB`}
+                  >
+                    ch{channel.index}: {channel.qualified_observations}
+                  </span>
+                ))}
+              </div>
+              {wavenis.recent_bursts.length > 0 && (
+                <div className="table-wrap" style={{ marginTop: 12 }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Sequence</th>
+                        <th>Channel</th>
+                        <th className="num">Frequency</th>
+                        <th className="num">Start</th>
+                        <th className="num">Duration</th>
+                        <th className="num">Peak SNR</th>
+                        <th className="num">Offset</th>
+                        <th>Evidence</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {wavenis.recent_bursts
+                        .slice(-10)
+                        .reverse()
+                        .map((burst) => (
+                          <tr key={burst.sequence}>
+                            <td className="mono">#{burst.sequence}</td>
+                            <td className="mono">ch{burst.channel_index}</td>
+                            <td className="num mono">{(burst.freq_hz / 1e6).toFixed(3)} MHz</td>
+                            <td className="num mono">{burst.start_s.toFixed(3)} s</td>
+                            <td className="num mono">{burst.duration_ms.toFixed(3)} ms</td>
+                            <td className="num mono">{burst.peak_snr_db.toFixed(1)} dB</td>
+                            <td className="num mono">{burst.freq_offset_hz.toFixed(0)} Hz</td>
+                            <td>
+                              <span className={`badge ${burst.qualified ? '' : 'dim'}`}>
+                                {burst.qualified ? 'qualified' : 'transient'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {error && <div className="notice danger">{error}</div>}
 
