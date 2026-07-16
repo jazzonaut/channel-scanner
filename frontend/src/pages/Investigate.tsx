@@ -6,7 +6,7 @@ import { api, ApiError } from '../lib/api';
 import { InfoTip } from '../components/InfoTip';
 import { meterScore } from '../lib/meterScore';
 import type { MeterScore } from '../lib/meterScore';
-import type { CandidateChannel, WavenisStatus } from '../lib/types';
+import type { CandidateChannel, WavenisCandidatesResponse, WavenisStatus } from '../lib/types';
 import { formatConfidence, formatSnr, hzToMHz } from '../lib/format';
 import './Investigate.css';
 
@@ -55,6 +55,7 @@ export function Investigate(): JSX.Element {
   const [decodeBusy, setDecodeBusy] = useState(false);
   const [decodeMessage, setDecodeMessage] = useState<string | null>(null);
   const [wavenis, setWavenis] = useState<WavenisStatus | null>(null);
+  const [candidates, setCandidates] = useState<WavenisCandidatesResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +67,12 @@ export function Investigate(): JSX.Element {
       } catch {
         // The generic scanner remains usable if an older backend lacks this
         // optional evidence endpoint.
+      }
+      try {
+        const flagged = await api.getWavenisCandidates(200);
+        if (!cancelled) setCandidates(flagged);
+      } catch {
+        // Older backend without the durable candidate log.
       }
     };
     void refresh();
@@ -181,6 +188,10 @@ export function Investigate(): JSX.Element {
                   </strong>{' '}
                   qualified bursts
                 </span>
+                <span className={`small ${(candidates?.total ?? wavenis.candidates_flagged) > 0 ? 'ok' : ''}`}>
+                  <strong>{candidates?.total ?? wavenis.candidates_flagged}</strong>{' '}
+                  likely candidates
+                </span>
                 <span className="small mono">
                   {(wavenis.receiver_center_hz / 1e6).toFixed(3)} MHz @{' '}
                   {(wavenis.sample_rate / 1e6).toFixed(1)} MS/s
@@ -241,6 +252,7 @@ export function Investigate(): JSX.Element {
                         <th className="num">Frequency</th>
                         <th className="num">Start</th>
                         <th className="num">Duration</th>
+                        <th className="num">Bandwidth</th>
                         <th className="num">Peak SNR</th>
                         <th className="num">Offset</th>
                         <th>Evidence</th>
@@ -251,23 +263,73 @@ export function Investigate(): JSX.Element {
                         .slice(-10)
                         .reverse()
                         .map((burst) => (
-                          <tr key={burst.sequence}>
+                          <tr
+                            key={burst.sequence}
+                            className={burst.is_candidate ? 'row-flagged' : undefined}
+                          >
                             <td className="mono">#{burst.sequence}</td>
                             <td className="mono">ch{burst.channel_index}</td>
                             <td className="num mono">{(burst.freq_hz / 1e6).toFixed(3)} MHz</td>
                             <td className="num mono">{burst.start_s.toFixed(3)} s</td>
                             <td className="num mono">{burst.duration_ms.toFixed(3)} ms</td>
+                            <td className="num mono">{(burst.bandwidth_hz / 1e3).toFixed(1)} kHz</td>
                             <td className="num mono">{burst.peak_snr_db.toFixed(1)} dB</td>
                             <td className="num mono">{burst.freq_offset_hz.toFixed(0)} Hz</td>
                             <td>
-                              <span className={`badge ${burst.qualified ? '' : 'dim'}`}>
-                                {burst.qualified ? 'qualified' : 'transient'}
-                              </span>
+                              {burst.is_candidate ? (
+                                <span className="badge ok" title={burst.candidate_reasons.join(', ')}>
+                                  candidate: {burst.candidate_reasons.join(', ')}
+                                </span>
+                              ) : (
+                                <span className={`badge ${burst.qualified ? '' : 'dim'}`}>
+                                  {burst.qualified ? 'qualified' : 'transient'}
+                                </span>
+                              )}
                             </td>
                           </tr>
                         ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {candidates && candidates.total > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <h3 style={{ margin: '0 0 4px' }}>
+                    Likely candidates <span className="badge ok">{candidates.total}</span>
+                  </h3>
+                  <p className="small faint" style={{ margin: '0 0 8px' }}>
+                    Auto-flagged bursts matching the Wavenis fingerprint, saved to disk so an
+                    unattended run keeps them across restarts. Persisted to{' '}
+                    <span className="mono">{candidates.path}</span>. Correlate the timestamp with
+                    water use to confirm.
+                  </p>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>When</th>
+                          <th className="num">Frequency</th>
+                          <th className="num">Duration</th>
+                          <th className="num">Bandwidth</th>
+                          <th className="num">Peak SNR</th>
+                          <th>Why flagged</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {candidates.candidates.slice(0, 25).map((c) => (
+                          <tr key={`${c.timestamp}-${c.sequence}`} className="row-flagged">
+                            <td className="mono small">{new Date(c.timestamp).toLocaleString()}</td>
+                            <td className="num mono">{(c.freq_hz / 1e6).toFixed(4)} MHz</td>
+                            <td className="num mono">{c.duration_ms.toFixed(0)} ms</td>
+                            <td className="num mono">{(c.bandwidth_hz / 1e3).toFixed(1)} kHz</td>
+                            <td className="num mono">{c.peak_snr_db.toFixed(1)} dB</td>
+                            <td className="small">{c.candidate_reasons.join(', ')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </>

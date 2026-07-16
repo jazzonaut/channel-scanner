@@ -261,11 +261,27 @@ export interface WavenisBurstEvidence {
   freq_hz: number;
   start_s: number;
   duration_ms: number;
+  bandwidth_hz: number;
   peak_snr_db: number;
   noise_db: number;
   above_frames: number;
   qualified: boolean;
   freq_offset_hz: number;
+  candidate_reasons: string[];
+  candidate_score: number;
+  is_candidate: boolean;
+}
+
+export interface WavenisCandidateRecord extends WavenisBurstEvidence {
+  timestamp: string;
+  session_id: number | null;
+  receiver_center_hz: number;
+}
+
+export interface WavenisCandidatesResponse {
+  total: number;
+  path: string;
+  candidates: WavenisCandidateRecord[];
 }
 
 export interface WavenisAcquisitionStatus {
@@ -309,6 +325,9 @@ export interface WavenisStatus {
   frames_processed: number;
   channels: WavenisChannelEvidence[];
   recent_bursts: WavenisBurstEvidence[];
+  recent_candidates: WavenisBurstEvidence[];
+  candidates_flagged: number;
+  candidates_persisted?: number;
   acquisition?: WavenisAcquisitionStatus;
   capture?: WavenisCaptureStatus;
 }

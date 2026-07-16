@@ -46,6 +46,7 @@ from ..signal_processing.wavenis import (
 from ..storage.repositories import Repositories
 from ..utils import iso_now, utcnow
 from ..websocket.manager import ConnectionManager
+from .candidate_log import CandidateLog
 from .control_lease import ControlLease
 from .decoder import DecodedMessage, ReceiveOnlyDecoder
 from .iq_stream import ContinuousIqStream
@@ -144,6 +145,8 @@ class ScanManager:
         # window, so hopping channels are observed continuously rather than by
         # a tuner sweep.
         self._wavenis = WavenisWidebandAnalyzer()
+        # Durable, uncapped candidate record on disk; survives restart/reboot.
+        self._candidate_log = CandidateLog(settings.logs_dir())
         self._iq_stream: ContinuousIqStream | None = None
         self._last_stream_status: dict[str, object] | None = None
         self._expected_stream_sample: int | None = None
@@ -404,8 +407,10 @@ class ScanManager:
         self._noise.reset()
         self._reset_band_buffer()
         self.metrics = ScanMetrics()
-        # Wipe persisted rows and recording files.
+        self._wavenis.reset()
+        # Wipe persisted rows, recording files, and the durable candidate log.
         await self._repos.clear_all_data()
+        self._candidate_log.clear()
         removed = self._recorder.delete_all() if self._recorder is not None else 0
         await self._emit_event("data_cleared", f"all data cleared (recordings removed={removed})")
         self._ws.broadcast_channels([])
@@ -566,15 +571,14 @@ class ScanManager:
                 floor = self._noise.update(power_db)
                 await self._process_frame(freqs, power_db, floor, center, span)
                 for burst in wavenis_bursts:
-                    if burst.qualified:
-                        if self._recorder is not None and self._recorder.enabled:
-                            self._trigger_capture.trigger(burst.to_dict())
-                        await self._emit_event(
-                            "wavenis_burst",
-                            f"ch={burst.channel_index} f={burst.freq_hz} "
-                            f"duration={burst.duration_ms:.2f}ms snr={burst.peak_snr_db:.1f}dB",
-                            data=burst.to_dict(),
-                        )
+                    if burst.qualified and self._recorder is not None and self._recorder.enabled:
+                        self._trigger_capture.trigger(burst.to_dict())
+                    # Only auto-flagged candidates are persisted/announced.
+                    # Routine qualified bursts stay in the live view + IQ
+                    # captures; emitting an event per burst would flood the DB
+                    # over a multi-hour run (a dense neighbour is ~9/s).
+                    if burst.is_candidate:
+                        await self._record_candidate(burst)
                 capture = self._trigger_capture.pop_ready()
                 if capture is not None and self._recorder is not None and self._recorder.enabled:
                     await self._save_triggered_capture(capture, center)
@@ -919,6 +923,41 @@ class ScanManager:
             and self._config.end_hz >= WAVENIS_CHANNELS_HZ[-1]
         )
 
+    async def _record_candidate(self, burst: WavenisBurst) -> None:
+        """Persist a flagged candidate durably (disk + events) and announce it."""
+        record = {
+            "timestamp": iso_now(),
+            "session_id": self._session_id,
+            "receiver_center_hz": self._current_center(),
+            **burst.to_dict(),
+        }
+        # Append to the uncapped on-disk log so it survives restart/reboot.
+        await asyncio.to_thread(self._candidate_log.append, record)
+        reasons = ", ".join(burst.candidate_reasons) or "—"
+        await self._emit_event(
+            "wavenis_candidate",
+            f"candidate f={burst.freq_hz} bw={burst.bandwidth_hz}Hz "
+            f"dur={burst.duration_ms:.0f}ms snr={burst.peak_snr_db:.1f}dB [{reasons}]",
+            data=record,
+        )
+        log.info(
+            "wavenis.candidate",
+            freq_hz=burst.freq_hz,
+            bandwidth_hz=burst.bandwidth_hz,
+            duration_ms=burst.duration_ms,
+            reasons=list(burst.candidate_reasons),
+            score=burst.candidate_score,
+        )
+
+    def candidates(self, limit: int | None = None) -> dict[str, object]:
+        """Return the durable candidate record for review after a long run."""
+        records = self._candidate_log.read_all(limit=limit)
+        return {
+            "total": self._candidate_log.count(),
+            "path": str(self._candidate_log.path),
+            "candidates": records,
+        }
+
     async def _save_triggered_capture(self, capture: TriggeredCapture, center_hz: int) -> None:
         assert self._recorder is not None
         loop = asyncio.get_running_loop()
@@ -1005,6 +1044,9 @@ class ScanManager:
                 "active": bool(self._scanning and observable),
                 "receiver_center_hz": center,
                 "sample_rate": self._config.sample_rate,
+                # Durable on-disk total; the in-memory snapshot count only
+                # covers the current session, so surface both.
+                "candidates_persisted": self._candidate_log.count(),
                 "acquisition": self._acquisition_status(),
                 "capture": {
                     **self._trigger_capture.snapshot(),

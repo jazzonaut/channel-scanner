@@ -31,6 +31,20 @@ WAVENIS_GRID_GUARD_HZ = 40_000
 _GRID_HZ = np.asarray(WAVENIS_CHANNELS_HZ, dtype=np.float64)
 _GRID_SPACING_HZ = 100_000
 
+# --- Wavenis candidate fingerprint (see wavenis_868_technical_reference.md) ---
+# A burst is auto-flagged as a likely-meter candidate when it looks unlike the
+# steady narrowband ISM neighbours and like the Wavenis signature: a ~1.1 s long
+# wake-up, a ~50 ms short wake-up, a wide (~50 kHz GFSK) occupied bandwidth, or a
+# fast hop across several grid channels (FHSS). Thresholds are deliberately
+# conservative so an unattended multi-hour run does not fill up with neighbours.
+LONG_WAKEUP_MS = (900.0, 1400.0)  # §10.1 default long wake-up ~1100 ms
+SHORT_WAKEUP_MS = (35.0, 70.0)  # §10.2 fixed short wake-up 50 ms
+WIDEBAND_MIN_HZ = 20_000  # neighbours seen at <3 kHz; Wavenis ~50 kHz (§40)
+HOP_WINDOW_S = 2.0  # window in which to count distinct hop channels
+HOP_MAX_BURST_MS = 200.0  # only short bursts count toward a hop set
+HOP_MIN_CHANNELS = 3  # distinct grid channels touched -> FHSS-like
+CANDIDATE_MIN_SCORE = 2.0  # total weighted score to flag a candidate
+
 
 def _nearest_grid_index(freq_hz: float) -> int:
     """Nearest nominal grid channel to a measured frequency (label only)."""
@@ -44,13 +58,17 @@ class WavenisBurst:
     freq_hz: int  # measured power-weighted centre frequency
     start_s: float
     duration_ms: float
+    bandwidth_hz: int  # measured occupied bandwidth (peak region span)
     peak_snr_db: float
     noise_db: float
     above_frames: int
     qualified: bool
     freq_offset_hz: float  # measured centre minus nearest grid channel
+    candidate_reasons: tuple[str, ...] = ()
+    candidate_score: float = 0.0
+    is_candidate: bool = False
 
-    def to_dict(self) -> dict[str, int | float | bool]:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
@@ -74,6 +92,7 @@ class _Track:
     center_hz: float
     peak_db: float
     peak_snr_db: float
+    peak_width_hz: float = 0.0
     above_frames: int = 0
     below_frames: int = 0
     centroids: list[float] = field(default_factory=list)
@@ -86,6 +105,7 @@ class _Region:
     center_hz: float
     peak_db: float
     peak_snr_db: float
+    width_hz: float
 
 
 class WavenisWidebandAnalyzer:
@@ -122,6 +142,8 @@ class WavenisWidebandAnalyzer:
         self._states = [_ChannelState() for _ in WAVENIS_CHANNELS_HZ]
         self._tracks: list[_Track] = []
         self._recent: deque[WavenisBurst] = deque(maxlen=recent_limit)
+        self._candidates: deque[dict] = deque(maxlen=recent_limit)
+        self._candidate_count = 0
         self._pending = np.empty(0, dtype=np.complex64)
         self._sample_cursor = 0
         self._sequence = 0
@@ -131,6 +153,7 @@ class WavenisWidebandAnalyzer:
         # Per-bin noise floor over the in-band region; sized on first block.
         self._bin_freqs: np.ndarray | None = None
         self._bin_noise_db: np.ndarray | None = None
+        self._bin_step = 0.0
 
     @staticmethod
     def can_observe(center_hz: int, sample_rate: int) -> bool:
@@ -145,6 +168,10 @@ class WavenisWidebandAnalyzer:
         self._states = [_ChannelState() for _ in WAVENIS_CHANNELS_HZ]
         self._tracks = []
         self._recent = deque(maxlen=recent_limit)
+        # In-memory candidate view is per-session; the all-time durable record
+        # lives on disk (see CandidateLog), so zeroing these here is safe.
+        self._candidates = deque(maxlen=recent_limit)
+        self._candidate_count = 0
         self._pending = np.empty(0, dtype=np.complex64)
         self._sample_cursor = 0
         self._sequence = 0
@@ -153,6 +180,7 @@ class WavenisWidebandAnalyzer:
         self._frames_processed = 0
         self._bin_freqs = None
         self._bin_noise_db = None
+        self._bin_step = 0.0
 
     def discontinuity(self, missing_samples: int = 0) -> None:
         """Drop partial bursts when acquisition reports a sample-sequence gap."""
@@ -196,6 +224,8 @@ class WavenisWidebandAnalyzer:
         band_freqs = absolute_freqs[in_band]
         band_power = power[:, in_band]
         power_db = 10.0 * np.log10(band_power + 1e-20)
+        if band_freqs.size > 1:
+            self._bin_step = float(band_freqs[1] - band_freqs[0])
 
         if (
             self._bin_noise_db is None
@@ -249,7 +279,15 @@ class WavenisWidebandAnalyzer:
             peak_local = int(np.argmax(seg_db))
             peak_db = float(seg_db[peak_local])
             peak_snr = peak_db - float(self._bin_noise_db[lo + peak_local])
-            regions.append(_Region(center_hz=centroid, peak_db=peak_db, peak_snr_db=peak_snr))
+            width_hz = float(hi - lo) * self._bin_step
+            regions.append(
+                _Region(
+                    center_hz=centroid,
+                    peak_db=peak_db,
+                    peak_snr_db=peak_snr,
+                    width_hz=width_hz,
+                )
+            )
         return regions
 
     def _track_regions(
@@ -271,6 +309,7 @@ class WavenisWidebandAnalyzer:
                         center_hz=region.center_hz,
                         peak_db=region.peak_db,
                         peak_snr_db=region.peak_snr_db,
+                        peak_width_hz=region.width_hz,
                         above_frames=1,
                         centroids=[region.center_hz],
                     )
@@ -283,6 +322,7 @@ class WavenisWidebandAnalyzer:
             track.above_frames += 1
             track.peak_db = max(track.peak_db, region.peak_db)
             track.peak_snr_db = max(track.peak_snr_db, region.peak_snr_db)
+            track.peak_width_hz = max(track.peak_width_hz, region.width_hz)
             track.centroids.append(region.center_hz)
             track.center_hz = float(np.median(track.centroids))
             matched.add(track_idx)
@@ -322,17 +362,35 @@ class WavenisWidebandAnalyzer:
         offset = measured_hz - float(_GRID_HZ[channel_index])
         qualified = track.above_frames >= self.min_qualified_frames
         noise_db = float(self._bin_noise_at(measured_hz))
+        bandwidth_hz = int(round(track.peak_width_hz))
+        start_s = track.start_sample / sample_rate
+
+        # Classify against the Wavenis fingerprint. Hop detection reads the
+        # prior-burst history in self._recent, so classify BEFORE appending.
+        reasons, score = self._classify(
+            duration_ms=duration_ms,
+            bandwidth_hz=bandwidth_hz,
+            channel_index=channel_index,
+            start_s=start_s,
+            qualified=qualified,
+        )
+        is_candidate = qualified and score >= CANDIDATE_MIN_SCORE
+
         burst = WavenisBurst(
             sequence=self._sequence,
             channel_index=channel_index,
             freq_hz=int(round(measured_hz)),
-            start_s=track.start_sample / sample_rate,
+            start_s=start_s,
             duration_ms=round(duration_ms, 3),
+            bandwidth_hz=bandwidth_hz,
             peak_snr_db=round(track.peak_snr_db, 3),
             noise_db=round(noise_db, 3),
             above_frames=track.above_frames,
             qualified=qualified,
             freq_offset_hz=round(offset, 1),
+            candidate_reasons=tuple(reasons),
+            candidate_score=round(score, 1),
+            is_candidate=is_candidate,
         )
         state = self._states[channel_index]
         state.observations += 1
@@ -341,7 +399,55 @@ class WavenisWidebandAnalyzer:
         state.peak_snr_db = max(state.peak_snr_db, track.peak_snr_db)
         state.noise_db = noise_db
         self._recent.append(burst)
+        if is_candidate:
+            self._candidate_count += 1
+            self._candidates.append(burst.to_dict())
         return burst
+
+    def _classify(
+        self,
+        *,
+        duration_ms: float,
+        bandwidth_hz: int,
+        channel_index: int,
+        start_s: float,
+        qualified: bool,
+    ) -> tuple[list[str], float]:
+        """Score a burst against the Wavenis fingerprint; return (reasons, score)."""
+        reasons: list[str] = []
+        score = 0.0
+        if LONG_WAKEUP_MS[0] <= duration_ms <= LONG_WAKEUP_MS[1]:
+            reasons.append("long_wakeup")
+            score += 3.0
+        if SHORT_WAKEUP_MS[0] <= duration_ms <= SHORT_WAKEUP_MS[1]:
+            reasons.append("short_wakeup")
+            score += 1.0
+        if bandwidth_hz >= WIDEBAND_MIN_HZ:
+            reasons.append("wideband")
+            score += 2.0
+        if qualified and self._hop_detected(channel_index, start_s, duration_ms):
+            reasons.append("fhss_hop")
+            score += 3.0
+        return reasons, score
+
+    def _hop_detected(self, channel_index: int, start_s: float, duration_ms: float) -> bool:
+        """True when several distinct grid channels see short bursts in a window.
+
+        This is the FHSS tell. It requires HOP_MIN_CHANNELS distinct channels
+        touched by *short* bursts inside HOP_WINDOW_S, which the static
+        narrowband neighbours (each parked on one channel) never produce.
+        """
+        if duration_ms > HOP_MAX_BURST_MS:
+            return False
+        window_start = start_s - HOP_WINDOW_S
+        channels = {channel_index}
+        for prior in self._recent:
+            if not prior.qualified or prior.duration_ms > HOP_MAX_BURST_MS:
+                continue
+            if prior.start_s < window_start or prior.start_s > start_s:
+                continue
+            channels.add(prior.channel_index)
+        return len(channels) >= HOP_MIN_CHANNELS
 
     def _bin_noise_at(self, freq_hz: float) -> float:
         if self._bin_freqs is None or self._bin_noise_db is None or self._bin_freqs.size == 0:
@@ -377,4 +483,6 @@ class WavenisWidebandAnalyzer:
             "frames_processed": self._frames_processed,
             "channels": channels,
             "recent_bursts": [burst.to_dict() for burst in self._recent],
+            "candidates_flagged": self._candidate_count,
+            "recent_candidates": list(self._candidates),
         }

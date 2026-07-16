@@ -25,6 +25,7 @@ import type {
   ScanConfigVersioned,
   ScanStartResponse,
   Session,
+  WavenisCandidatesResponse,
   WavenisStatus,
 } from './types';
 
@@ -192,6 +193,8 @@ export const api = {
 
   // --- Wavenis 868 wideband evidence (receive-only) ---
   getWavenisStatus: (): Promise<WavenisStatus> => request('/api/wavenis'),
+  getWavenisCandidates: (limit = 500): Promise<WavenisCandidatesResponse> =>
+    request(`/api/wavenis/candidates?limit=${limit}`),
 };
 
 export type Api = typeof api;

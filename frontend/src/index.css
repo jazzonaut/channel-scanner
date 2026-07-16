@@ -290,6 +290,13 @@ textarea:focus {
 .badge.dim {
   color: var(--text-faint);
 }
+/* Emphasise an auto-flagged Wavenis candidate. */
+.ok {
+  color: var(--ok);
+}
+tr.row-flagged td {
+  background: rgba(52, 211, 153, 0.08);
+}
 
 /* ---------- tables ---------- */
 .table-wrap {

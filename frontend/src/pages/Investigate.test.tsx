@@ -9,6 +9,7 @@ const stopScan = vi.fn();
 const focus = vi.fn();
 const runDecoder = vi.fn();
 const getWavenisStatus = vi.fn();
+const getWavenisCandidates = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -17,6 +18,7 @@ vi.mock('../lib/api', () => ({
     focus: (centerHz: number) => focus(centerHz),
     runDecoder: () => runDecoder(),
     getWavenisStatus: () => getWavenisStatus(),
+    getWavenisCandidates: () => getWavenisCandidates(),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -61,6 +63,8 @@ beforeEach(() => {
   runDecoder.mockReset();
   getWavenisStatus.mockReset();
   getWavenisStatus.mockImplementation(() => new Promise(() => {}));
+  getWavenisCandidates.mockReset();
+  getWavenisCandidates.mockResolvedValue({ total: 0, path: '', candidates: [] });
   useStore.getState().setChannels([]);
   useStore.getState().setScanning(false);
 });
