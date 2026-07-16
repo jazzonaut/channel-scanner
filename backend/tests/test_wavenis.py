@@ -48,9 +48,7 @@ def test_wideband_analyzer_recovers_chronological_hops() -> None:
 
 def test_noise_does_not_create_qualified_bursts() -> None:
     rng = np.random.default_rng(7)
-    iq = (rng.normal(0, 0.01, 240_000) + 1j * rng.normal(0, 0.01, 240_000)).astype(
-        np.complex64
-    )
+    iq = (rng.normal(0, 0.01, 240_000) + 1j * rng.normal(0, 0.01, 240_000)).astype(np.complex64)
     analyzer = WavenisWidebandAnalyzer()
     events = analyzer.process(iq, center_hz=WAVENIS_CENTER_HZ, sample_rate=2_400_000)
     assert not [event for event in events if event.qualified]
