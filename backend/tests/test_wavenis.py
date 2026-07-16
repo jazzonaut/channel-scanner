@@ -11,6 +11,7 @@ from app.signal_processing.wavenis import (
     WAVENIS_CHANNELS_HZ,
     WIDEBAND_MIN_HZ,
     WavenisWidebandAnalyzer,
+    observable_center_hz,
 )
 
 
@@ -101,6 +102,16 @@ def test_wideband_burst_is_flagged_and_persisted_in_snapshot() -> None:
     assert len(snap["recent_candidates"]) >= 1
 
 
+def test_observable_center_avoids_dc_on_a_grid_channel() -> None:
+    # The parked centre must still see the whole grid, but must NOT sit on any
+    # grid channel (the RTL-SDR DC spike would blind it). It should be at least
+    # ~half a channel away from every channel.
+    center = observable_center_hz(2_400_000)
+    assert WavenisWidebandAnalyzer.can_observe(center, 2_400_000)
+    nearest_gap = min(abs(center - ch) for ch in WAVENIS_CHANNELS_HZ)
+    assert nearest_gap >= 40_000
+
+
 def test_persistent_emitter_is_flagged_a_few_times_then_suppressed() -> None:
     # A wideband fixture that keeps re-transmitting (like the 868.1 neighbour)
     # must not flood the log: flag CANDIDATE_PERSISTENT_AFTER times, then
@@ -110,7 +121,9 @@ def test_persistent_emitter_is_flagged_a_few_times_then_suppressed() -> None:
     analyzer = WavenisWidebandAnalyzer()
     eligible = 0
     flagged = 0
-    for _ in range(6):  # six separate wideband bursts at the same frequency
+    # Enough separate wideband bursts at one frequency to exceed the cap and
+    # exercise suppression, regardless of the exact CANDIDATE_PERSISTENT_AFTER.
+    for _ in range(CANDIDATE_PERSISTENT_AFTER * 3):
         events = analyzer.process(
             _capture_wideband(), center_hz=WAVENIS_CENTER_HZ, sample_rate=2_400_000
         )
@@ -119,7 +132,7 @@ def test_persistent_emitter_is_flagged_a_few_times_then_suppressed() -> None:
                 eligible += 1
             if e.is_candidate:
                 flagged += 1
-    assert eligible >= 3
+    assert eligible > CANDIDATE_PERSISTENT_AFTER
     assert flagged == CANDIDATE_PERSISTENT_AFTER
     snap = analyzer.snapshot()
     assert snap["suppressed_recurring"] == eligible - CANDIDATE_PERSISTENT_AFTER

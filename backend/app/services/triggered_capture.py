@@ -33,8 +33,13 @@ class TriggeredCaptureBuffer:
         sample_rate: int,
         *,
         pre_trigger_s: float = 2.0,
-        post_trigger_s: float = 1.0,
-        max_capture_s: float = 5.0,
+        # A point-to-point exchange (ref §11/§12) is a ~1.1 s long wake-up, then
+        # a request, then a response that can arrive up to the ~2 s radio user
+        # timeout later. Hold the capture open long enough after the last burst
+        # to catch that trailing response, and cap the whole window generously
+        # so the request and its response land in one recording.
+        post_trigger_s: float = 2.5,
+        max_capture_s: float = 8.0,
     ) -> None:
         self.sample_rate = int(sample_rate)
         self.pre_trigger_samples = max(1, int(self.sample_rate * pre_trigger_s))

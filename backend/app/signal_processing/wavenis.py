@@ -55,13 +55,44 @@ CANDIDATE_MIN_SCORE = 2.0  # total weighted score to flag a candidate
 # again is a fixed installation (like the dual-tone 868.1 neighbour), not a
 # meter. Flag each frequency bucket only a few times, then suppress-and-count
 # it so a persistent emitter cannot flood the durable log over a long run.
+#
+# The cap is deliberately generous: a genuine meter read is rare (a handful per
+# day) and whether the wake-up hops is unknown (ref §45), so if it lands on a
+# consistent frequency we want several durable samples to characterise its
+# cadence over a multi-day run -- not just the two needed to prove it exists.
+# A chatty neighbour (~9 bursts/s) is still bounded to this many durable rows.
 CANDIDATE_BUCKET_HZ = 50_000  # frequency bucket width for the novelty filter
-CANDIDATE_PERSISTENT_AFTER = 2  # flag a bucket this many times, then suppress
+CANDIDATE_PERSISTENT_AFTER = 6  # flag a bucket this many times, then suppress
+
+# The RTL-SDR (zero-IF) shows a persistent DC-offset spike at the tuned centre.
+# The natural grid midpoint is channel 7, so parking there would blind that
+# channel; offset the parked centre by half a channel so DC lands between two
+# grid channels instead.
+_DC_GRID_OFFSET_HZ = _GRID_SPACING_HZ // 2
 
 
 def _nearest_grid_index(freq_hz: float) -> int:
     """Nearest nominal grid channel to a measured frequency (label only)."""
     return int(np.argmin(np.abs(_GRID_HZ - float(freq_hz))))
+
+
+def observable_center_hz(sample_rate: int) -> int:
+    """Parked receiver centre that observes the whole grid without a DC blind.
+
+    Covers grid ± guard in one window (so ``WavenisWidebandAnalyzer.can_observe``
+    holds) while keeping the zero-IF DC-offset spike off every grid channel: the
+    natural band midpoint is channel 7, so we offset by half a channel spacing.
+    If the sample rate is too narrow to leave room for the offset, fall back to
+    the plain midpoint -- covering the grid matters more than dodging DC.
+    """
+    midpoint = (WAVENIS_CHANNELS_HZ[0] + WAVENIS_CHANNELS_HZ[-1]) // 2
+    offset = midpoint + _DC_GRID_OFFSET_HZ
+    half = int(sample_rate) // 2
+    lowest = WAVENIS_CHANNELS_HZ[-1] + WAVENIS_GRID_GUARD_HZ - half
+    highest = WAVENIS_CHANNELS_HZ[0] - WAVENIS_GRID_GUARD_HZ + half
+    if lowest <= offset <= highest:
+        return int(offset)
+    return int(midpoint)
 
 
 @dataclass(frozen=True)

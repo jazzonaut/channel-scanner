@@ -42,6 +42,7 @@ from ..signal_processing.wavenis import (
     WAVENIS_CHANNELS_HZ,
     WavenisBurst,
     WavenisWidebandAnalyzer,
+    observable_center_hz,
 )
 from ..storage.repositories import Repositories
 from ..utils import iso_now, utcnow
@@ -1248,7 +1249,13 @@ class ScanManager:
         band = max(1, end - start)
 
         if band <= span:
-            self._sweep_centers = [(start + end) // 2]
+            # For the Wavenis single-window profile, park off-grid so the
+            # RTL-SDR DC spike does not blind a grid channel (channel 7 sits on
+            # the plain midpoint); otherwise centre the requested band.
+            if self._wavenis_profile_configured():
+                self._sweep_centers = [observable_center_hz(span)]
+            else:
+                self._sweep_centers = [(start + end) // 2]
             self._sweep_idx = 0
             return
 
