@@ -233,9 +233,7 @@ class ScanManager:
         if was_scanning:
             await self.start_scan()
 
-    async def _activate_selection(
-        self, sel: BackendSelection, *, event_type: str
-    ) -> None:
+    async def _activate_selection(self, sel: BackendSelection, *, event_type: str) -> None:
         """Open the selected backend, reconcile config, and flag HW degradation.
 
         Shared by startup and runtime reconfigure so both paths surface a silent
