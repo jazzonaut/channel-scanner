@@ -7,6 +7,7 @@ fall back to simulation. RECEIVE-ONLY: only tuning + sample capture.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from collections.abc import Callable
 
@@ -56,6 +57,11 @@ class RtlSdrBackend(SdrBackend):
         self._dev: RtlSdr | None = None  # type: ignore[valid-type]
         self._applied_center_hz: int | None = None
         self._applied_sample_rate: int | None = None
+        # librtlsdr's freq-correction defaults to 0 ppm on a freshly opened
+        # device, so track that baseline: re-applying the same value (notably
+        # 0 -> 0 at open) makes rtlsdr_set_freq_correction() return -2, which
+        # would otherwise abort open() and trigger a silent sim fallback.
+        self._applied_ppm: int = 0
 
     def open(self) -> None:
         if self._dev is not None:
@@ -134,9 +140,16 @@ class RtlSdrBackend(SdrBackend):
                 self._dev.gain = float(gain)
 
     def set_ppm(self, ppm: int) -> None:
-        self._ppm = int(ppm)
-        if self._dev is not None:  # pragma: no cover
-            self._dev.freq_correction = int(ppm)
+        ppm = int(ppm)
+        self._ppm = ppm
+        if self._dev is not None and ppm != self._applied_ppm:  # pragma: no cover
+            # librtlsdr returns LIBUSB_ERROR_INVALID_PARAM (-2) when asked to set
+            # the correction to its current value -- a harmless no-op, not a
+            # device failure. Suppress it rather than let it bubble up and knock
+            # the whole backend down to simulation.
+            with contextlib.suppress(Exception):
+                self._dev.freq_correction = ppm
+            self._applied_ppm = ppm
 
     @property
     def tune_range(self) -> TuneRange:

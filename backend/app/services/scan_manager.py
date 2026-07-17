@@ -26,7 +26,7 @@ import structlog
 from ..config import Settings
 from ..models import schemas
 from ..sdr.base import SdrBackend
-from ..sdr.factory import create_backend
+from ..sdr.factory import BackendSelection, create_backend
 from ..signal_processing import psd as psd_mod
 from ..signal_processing.clustering import ChannelClusterer
 from ..signal_processing.detector import detect_regions
@@ -156,6 +156,12 @@ class ScanManager:
         self._polled_samples = 0
         self._retunes = 0
 
+        # Set when the operator asked for real hardware but the factory had to
+        # fall back to the simulator. Surfaced via the health check so a silent
+        # sim fallback cannot masquerade as a real capture.
+        self._hardware_degraded = False
+        self._hardware_reason: str | None = None
+
     # ------------------------------------------------------------------ config
     @staticmethod
     def _initial_config(s: Settings) -> schemas.ScanConfig:
@@ -222,21 +228,44 @@ class ScanManager:
                 "scan_end_hz": self._config.end_hz,
             }
         )
-        self._backend = create_backend(eff)
+        sel = create_backend(eff)
+        await self._activate_selection(sel, event_type="backend_reconfigured")
+        if was_scanning:
+            await self.start_scan()
+
+    async def _activate_selection(
+        self, sel: BackendSelection, *, event_type: str
+    ) -> None:
+        """Open the selected backend, reconcile config, and flag HW degradation.
+
+        Shared by startup and runtime reconfigure so both paths surface a silent
+        sim fallback identically: a warning event plus a sticky degraded flag the
+        health check reads. Without this, an operator who set SIMULATION_MODE=false
+        could collect days of synthetic data believing it was a real capture.
+        """
+        self._backend = sel.backend
         self._backend.open()
         info = self._backend.get_info()
         # Reconcile with the backend actually opened (factory may have fallen back).
         self._config = self._config.model_copy(
             update={"backend": info.backend, "simulation": info.simulation}
         )
+        self._hardware_degraded = sel.degraded
+        self._hardware_reason = sel.reason if sel.degraded else None
         await self._emit_event(
-            "backend_reconfigured",
+            event_type,
             f"backend={info.backend} simulation={info.simulation}",
             data={"backend": info.backend, "simulation": info.simulation},
         )
-        log.info("scan.backend_reconfigured", backend=info.backend, simulation=info.simulation)
-        if was_scanning:
-            await self.start_scan()
+        log.info(f"scan_manager.{event_type}", backend=info.backend, simulation=info.simulation)
+        if sel.degraded:
+            await self._emit_event(
+                "sdr_hardware_unavailable",
+                f"requested {sel.requested!r} unavailable; running SIMULATION instead: "
+                f"{sel.reason}",
+                data={"requested": sel.requested, "reason": sel.reason},
+            )
+            log.error("sdr.hardware_unavailable", requested=sel.requested, reason=sel.reason)
 
     def _proximity_hz(self) -> int:
         widths = self._config.known_channel_widths_hz
@@ -290,21 +319,23 @@ class ScanManager:
             }
         return self._backend.get_info().to_dict()
 
+    @property
+    def hardware_degraded(self) -> bool:
+        """True when hardware was requested but the backend fell back to sim."""
+        return self._hardware_degraded
+
+    @property
+    def hardware_reason(self) -> str | None:
+        return self._hardware_reason
+
     # ------------------------------------------------------------- lifecycle
     async def startup(self) -> None:
-        self._backend = create_backend(self._settings)
-        self._backend.open()
-        # Reconcile config.simulation with the backend that was actually chosen.
-        info = self._backend.get_info()
-        self._config = self._config.model_copy(
-            update={"backend": info.backend, "simulation": info.simulation}
-        )
+        sel = create_backend(self._settings)
         # Load persisted config version if present.
         latest = await self._repos.receiver_config.latest()
         if latest is not None:
             self._version = latest[0]
-        await self._emit_event("startup", f"backend={info.backend} simulation={info.simulation}")
-        log.info("scan_manager.startup", backend=info.backend, simulation=info.simulation)
+        await self._activate_selection(sel, event_type="startup")
 
     async def shutdown(self) -> None:
         await self.stop_scan()

@@ -87,3 +87,5 @@ firmware/**/.pio/
 ehthumbs.db
 Thumbs.db
 desktop.ini
+.tokensave
+.claude

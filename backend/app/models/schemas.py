@@ -226,6 +226,12 @@ class HealthResponse(BaseModel):
     simulation: bool
     uptime_s: float
     version: str
+    # True when real hardware was requested (SIMULATION_MODE=false) but the SDR
+    # backend silently fell back to the simulator. When set, /api/health returns
+    # HTTP 503 so container health checks fail instead of the fallback going
+    # unnoticed for the length of an entire capture.
+    hardware_degraded: bool = False
+    detail: str | None = None
 
 
 class MetricsResponse(BaseModel):
